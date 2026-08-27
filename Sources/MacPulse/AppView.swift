@@ -157,6 +157,8 @@ struct AppView: View {
             }
         }
         .frame(minWidth: 980, minHeight: 600)
+        .animation(.easeInOut(duration: 0.18), value: activePane)
+        .animation(.easeInOut(duration: 0.18), value: chatVisible)
         .sheet(isPresented: $showSettings) {
             SettingsSheet(store: store)
                 .onDisappear {

@@ -12,6 +12,7 @@ struct ChatPanel: View {
     var onTogglePin: (() -> Void)? = nil
     @State private var dragStartWidth: CGFloat?
     @State private var handleHovering = false
+    @State private var isDragging = false
     @State private var copied = false
 
     static let defaultWidth: CGFloat = 460
@@ -41,32 +42,47 @@ struct ChatPanel: View {
         }
         .frame(width: panelWidth)
         .background(Color(nsColor: .textBackgroundColor))
+        .clipShape(RoundedRectangle(cornerRadius: 0))
         .transition(.move(edge: .trailing).combined(with: .opacity))
     }
 
-    /// 左缘拖拽把手：左右拖动调整面板宽度（320–860pt），双击恢复默认。
+    /// 左缘拖拽把手：可见 grip 图标（三条短横杠），悬停/拖拽时高亮。
+    /// 拖拽实时跟手不加动画；其余状态切换使用短缓动。
     private var dragHandle: some View {
-        Rectangle()
-            .fill(handleHovering ? Color.accentColor.opacity(0.45) : Color.clear)
-            .frame(width: 5)
-            .contentShape(Rectangle())
-            .onHover { hovering in
-                handleHovering = hovering
-            }
-            .gesture(
-                DragGesture(minimumDistance: 1)
-                    .onChanged { value in
-                        if dragStartWidth == nil { dragStartWidth = panelWidth }
-                        panelWidth = Self.clampedWidth((dragStartWidth ?? Self.defaultWidth) - value.translation.width)
-                    }
-                    .onEnded { _ in dragStartWidth = nil }
-            )
-            .onTapGesture(count: 2) {
-                withAnimation(.easeOut(duration: 0.15)) {
-                    panelWidth = Self.defaultWidth
+        let active = isDragging || handleHovering
+        return ZStack {
+            Rectangle()
+                .fill(Color.primary.opacity(active ? 0.06 : 0.03))
+            VStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { _ in
+                    Capsule()
+                        .fill(active ? Color.accentColor : Color.primary.opacity(0.30))
+                        .frame(width: active ? 10 : 8, height: 2)
                 }
             }
-            .help(L10n.s("拖拽调整宽度（320–860pt）；双击恢复默认", "Drag to resize (320–860pt); double-click to reset"))
+        }
+        .frame(width: 9)
+        .contentShape(Rectangle())
+        .animation(.easeInOut(duration: 0.15), value: active)
+        .onHover { handleHovering = $0 }
+        .gesture(
+            DragGesture(minimumDistance: 1)
+                .onChanged { value in
+                    isDragging = true
+                    if dragStartWidth == nil { dragStartWidth = panelWidth }
+                    panelWidth = Self.clampedWidth((dragStartWidth ?? Self.defaultWidth) - value.translation.width)
+                }
+                .onEnded { _ in
+                    isDragging = false
+                    dragStartWidth = nil
+                }
+        )
+        .onTapGesture(count: 2) {
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
+                panelWidth = Self.defaultWidth
+            }
+        }
+        .help(L10n.s("拖拽调整宽度（320–860pt）；双击恢复默认", "Drag to resize (320–860pt); double-click to reset"))
     }
 
     private var header: some View {
