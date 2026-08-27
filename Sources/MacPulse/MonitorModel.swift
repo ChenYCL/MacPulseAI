@@ -19,6 +19,9 @@ final class MonitorModel: ObservableObject {
 
     private let sampler: ProcessSampler
     private let loadTracker = SystemLoadTracker()
+    /// 采样专用串行队列：sampler 的内部缓存只在这条队列上被访问。
+    private let samplingQueue = DispatchQueue(label: "com.chenycl.macpulseai.sampling", qos: .utility)
+    private var isSampling = false
     private var timer: Timer?
     private var isRunning = false
     private(set) var latestProcesses: [ProcSample] = []
@@ -58,14 +61,34 @@ final class MonitorModel: ObservableObject {
 
     func tick() {
         guard !isPaused else { return }
+        // 这几项是 mach/sysctl 直接读取，微秒级，留在主线程无妨
         let l = loadTracker.current()
         load = l
         onLoadUpdate?(l)
         refreshMemoryStats()
-        do {
-            latestProcesses = try sampler.sample()
-            if isWindowVisible { processes = latestProcesses }
-        } catch {
+
+        // 进程采样要 fork /bin/ps 并 waitUntilExit，实测 100ms+（系统负载高时更久）。
+        // 放在主线程会周期性阻塞事件循环：⌘Q 恰好落进这段阻塞就会被系统判为
+        // 「应用无响应」，用户只能强制退出。这里挪到串行后台队列，主线程只做发布。
+        guard !isSampling else { return }   // 上一轮未返回则跳过本轮，避免任务堆积
+        isSampling = true
+        let sampler = self.sampler
+        samplingQueue.async { [weak self] in
+            let result = Result { try sampler.sample() }
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.isSampling = false
+                self.applySample(result)
+            }
+        }
+    }
+
+    private func applySample(_ result: Result<[ProcSample], Error>) {
+        switch result {
+        case .success(let procs):
+            latestProcesses = procs
+            if isWindowVisible { processes = procs }
+        case .failure(let error):
             statusMessage = L10n.s("进程采样失败：\(error.localizedDescription)",
                                    "Process sampling failed: \(error.localizedDescription)")
         }

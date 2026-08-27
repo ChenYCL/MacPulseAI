@@ -68,7 +68,10 @@ enum PSParser {
 /// 进程采样器：ps 取全量指标（含 root 进程的 CPU 时间），proc_pidpath 取完整路径。
 /// 瞬时 CPU% = 相邻两次「累计 CPU 时间」之差 ÷ 墙钟间隔 × 100。
 /// readOutput / now / cores / pathProvider / threadsProvider 均可注入，便于单元测试。
-final class ProcessSampler {
+///
+/// 线程约束：内部缓存（pathCache / threadsCache / lastCPUTime）没有加锁，
+/// 实例必须只在单一串行队列上使用。MonitorModel 用 samplingQueue 串行化，测试为单线程。
+final class ProcessSampler: @unchecked Sendable {
     var readOutput: () throws -> String
     var now: () -> Date
     let cores: Int

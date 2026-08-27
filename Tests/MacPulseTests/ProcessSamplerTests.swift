@@ -150,4 +150,42 @@ final class ProcessSamplerTests: XCTestCase {
         let p = try XCTUnwrap(second.first { $0.pid == 100 })
         XCTAssertGreaterThanOrEqual(p.cpuPercent, 0)
     }
+
+    // MARK: 采样异步化（主线程不得被 fork/ps 阻塞）
+
+    /// 回归：采样曾在主线程同步 fork /bin/ps（实测 100ms+），周期性卡住事件循环；
+    /// ⌘Q 落进阻塞窗口就被系统判为无响应而只能强制退出。
+    /// 现在 tick() 把采样派发到串行后台队列，主线程只在回调里做发布。
+    @MainActor
+    func testTickDoesNotBlockMainThreadOnSlowSampling() async throws {
+        let slowSampler = ProcessSampler(
+            readOutput: {
+                Thread.sleep(forTimeInterval: 0.4)   // 模拟负载高时的 ps
+                return "100 light 501 S 0:00.10 1.0 0.1 1024 node"
+            },
+            now: { Date() },
+            cores: 8,
+            pidsProvider: { [100] },
+            pathProvider: { _ in "/usr/local/bin/node" },
+            threadsProvider: { _ in 4 }
+        )
+        let model = MonitorModel(sampler: slowSampler)
+        model.start()
+
+        // 主线程在采样期间必须保持可调度：连续两轮 tick 的总墙钟时间里
+        // 我们在主执行器上 await 了 0.15s 两次，若 tick 同步阻塞 0.4s 会直接超时。
+        let began = Date()
+        model.tick()
+        try await Task.sleep(nanoseconds: 150_000_000)
+        model.tick()
+        let elapsed = Date().timeIntervalSince(began)
+        XCTAssertLessThan(elapsed, 0.9,
+                          "tick() 必须立即返回；主线程不应被采样阻塞（实际 \(elapsed)s）")
+
+        // 后台采样最终会回来更新列表
+        for _ in 0..<50 where model.latestProcesses.isEmpty {
+            try await Task.sleep(nanoseconds: 100_000_000)
+        }
+        XCTAssertFalse(model.latestProcesses.isEmpty, "后台采样结果应回填")
+    }
 }
