@@ -13,6 +13,8 @@ enum LLMError: LocalizedError {
     case badURL(String)
     case http(Int, String)
     case emptyResponse
+    /// 模型只返回了思考过程没有正文（常见于思考型模型 + max_tokens 过小被截断）。
+    case reasoningOnly(String)
     case invalidResponse(String)
 
     var errorDescription: String? {
@@ -26,6 +28,10 @@ enum LLMError: LocalizedError {
                 : L10n.s("HTTP \(code)：\(preview)", "HTTP \(code): \(preview)")
         case .emptyResponse:
             return L10n.s("模型返回内容为空", "Model returned empty content")
+        case .reasoningOnly(let preview):
+            let trimmed = String(preview.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
+            return L10n.s("模型只输出了思考过程，未生成正文（常见于思考型模型的 max_tokens 被截断）。可在设置中换用其他模型。\n思考片段：\(trimmed)",
+                          "The model only produced reasoning with no final answer (thinking model truncated by max_tokens?). Try a different model in Settings.\nReasoning excerpt: \(trimmed)")
         case .invalidResponse(let detail):
             let preview = String(detail.prefix(300)).trimmingCharacters(in: .whitespacesAndNewlines)
             return L10n.s("响应解析失败：\(preview)", "Failed to parse response: \(preview)")
@@ -64,12 +70,26 @@ struct OpenAIChatRequest: Encodable {
     }
     let model: String
     let temperature: Double
+    let max_tokens: Int
     let messages: [Message]
+
+    init(model: String, temperature: Double, maxTokens: Int, messages: [Message]) {
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = maxTokens
+        self.messages = messages
+    }
 }
 
 struct OpenAIChatResponse: Decodable {
     struct Choice: Decodable {
-        struct Message: Decodable { let content: String? }
+        struct Message: Decodable {
+            let content: String?
+            /// 思考型模型的推理内容（部分 OpenAI 兼容网关会单独返回此字段）。
+            let reasoning_content: String?
+            private enum CodingKeys: String, CodingKey { case content, reasoning_content }
+        }
+        let finish_reason: String?
         let message: Message
     }
     let choices: [Choice]
@@ -84,13 +104,22 @@ final class OpenAIService: LLMServicing {
         self.session = session
     }
 
+    /// 首次 max_tokens 不足导致思考型模型只产出思考内容时，自动翻倍重试一次。
     func complete(system: String, user: String) async throws -> String {
+        do {
+            return try await send(maxTokens: 4096, system: system, user: user)
+        } catch LLMError.reasoningOnly {
+            return try await send(maxTokens: 8192, system: system, user: user)
+        }
+    }
+
+    private func send(maxTokens: Int, system: String, user: String) async throws -> String {
         let base = try normalizedBase(config.baseURL)
         guard let url = URL(string: base + "/chat/completions") else { throw LLMError.badURL(config.baseURL) }
 
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 30
+        req.timeoutInterval = 60
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !config.apiKey.isEmpty {
             req.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
@@ -98,6 +127,7 @@ final class OpenAIService: LLMServicing {
         req.httpBody = try JSONEncoder().encode(
             OpenAIChatRequest(model: config.model,
                               temperature: 0.3,
+                              maxTokens: maxTokens,
                               messages: [.init(role: "system", content: system),
                                          .init(role: "user", content: user)])
         )
@@ -109,10 +139,16 @@ final class OpenAIService: LLMServicing {
         }
         do {
             let decoded = try JSONDecoder().decode(OpenAIChatResponse.self, from: data)
-            guard let content = decoded.choices.first?.message.content, !content.isEmpty else {
-                throw LLMError.emptyResponse
+            guard let choice = decoded.choices.first else { throw LLMError.emptyResponse }
+            if let content = choice.message.content, !content.isEmpty { return content }
+            // 思考型模型兜底：content 为空但有独立推理字段/被 max_tokens 截断
+            if let reasoning = choice.message.reasoning_content, !reasoning.isEmpty {
+                throw LLMError.reasoningOnly(reasoning)
             }
-            return content
+            if choice.finish_reason == "length" {
+                throw LLMError.reasoningOnly(L10n.s("（响应因 max_tokens 截断）", "(response truncated by max_tokens)"))
+            }
+            throw LLMError.emptyResponse
         } catch let error as LLMError {
             throw error
         } catch {
@@ -138,8 +174,12 @@ struct AnthropicResponse: Decodable {
     struct Block: Decodable {
         let type: String?
         let text: String?
+        /// 思考型模型（如 GLM/claude 扩展思考）可能单独输出 thinking 块。
+        let thinking: String?
+        private enum CodingKeys: String, CodingKey { case type, text, thinking }
     }
     let content: [Block]
+    let stop_reason: String?
 }
 
 final class AnthropicService: LLMServicing {
@@ -158,11 +198,20 @@ final class AnthropicService: LLMServicing {
         return url
     }
 
+    /// 首次 max_tokens 不足导致思考型模型只产出思考内容时，自动翻倍重试一次。
     func complete(system: String, user: String) async throws -> String {
+        do {
+            return try await send(maxTokens: 4096, system: system, user: user)
+        } catch LLMError.reasoningOnly {
+            return try await send(maxTokens: 8192, system: system, user: user)
+        }
+    }
+
+    private func send(maxTokens: Int, system: String, user: String) async throws -> String {
         let url = try messagesURL()
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = 30
+        req.timeoutInterval = 60
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         if !config.apiKey.isEmpty {
@@ -170,7 +219,7 @@ final class AnthropicService: LLMServicing {
         }
         req.httpBody = try JSONEncoder().encode(
             AnthropicRequest(model: config.model,
-                             max_tokens: 1024,
+                             max_tokens: maxTokens,
                              system: system,
                              messages: [.init(role: "user", content: user)])
         )
@@ -182,10 +231,20 @@ final class AnthropicService: LLMServicing {
         }
         do {
             let decoded = try JSONDecoder().decode(AnthropicResponse.self, from: data)
-            let text = decoded.content.filter { $0.type == nil || $0.type == "text" }
+            // 正文：拼接所有 text 块
+            let text = decoded.content.filter { ($0.type == nil || $0.type == "text") }
                 .compactMap { $0.text }.joined()
-            guard !text.isEmpty else { throw LLMError.emptyResponse }
-            return text
+            if !text.isEmpty { return text }
+
+            // 思考型模型兜底：max_tokens 可能在思考阶段耗尽导致正文为空
+            let reasoning = decoded.content.compactMap { $0.thinking }.joined()
+            if !reasoning.isEmpty {
+                throw LLMError.reasoningOnly(reasoning)
+            }
+            if decoded.stop_reason == "max_tokens" {
+                throw LLMError.reasoningOnly(L10n.s("（响应因 max_tokens 截断）", "(response truncated by max_tokens)"))
+            }
+            throw LLMError.emptyResponse
         } catch let error as LLMError {
             throw error
         } catch {

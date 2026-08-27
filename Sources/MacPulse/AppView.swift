@@ -335,11 +335,25 @@ struct AppView: View {
             do {
                 let service = LLMServiceFactory.service(for: config)
                 let text = try await service.complete(system: prompt.system, user: prompt.user)
-                aiState = .done(text)
+                aiState = .done(Self.normalizedModelOutput(text))
             } catch {
                 aiState = .failed(error.localizedDescription)
             }
         }
+    }
+
+    /// 规范化模型输出：剥掉整体包裹的 ```/```markdown 围栏，避免渲染出字面围栏。
+    static func normalizedModelOutput(_ raw: String) -> String {
+        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard text.hasPrefix("```") else { return text }
+        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        guard lines.count > 2,
+              lines.first?.range(of: "^```\\s*(markdown|md)?\\s*$", options: .regularExpression) != nil,
+              lines.last?.trimmingCharacters(in: .whitespaces) == "```"
+        else { return text }
+        lines.removeFirst()
+        lines.removeLast()
+        return lines.joined(separator: "\n")
     }
 }
 
