@@ -20,6 +20,7 @@ final class UninstallerTests: XCTestCase {
         super.tearDown()
     }
 
+    @discardableResult
     private func makeApp(_ appsDir: URL, name: String, bundleID: String) -> URL {
         let appURL = appsDir.appendingPathComponent("\(name).app", isDirectory: true)
         try? FileManager.default.createDirectory(
