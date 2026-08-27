@@ -498,7 +498,8 @@ enum PromptBuilder {
             5. 除终止进程外，你还可以提议清理与维护动作（同样必须经用户确认）：
                <action action="clean" target="app_caches|logs|dev_caches"/>   → 移入废纸篓（app_caches=应用缓存；logs=日志；dev_caches=Xcode/npm/gradle 等开发缓存）
                <action action="maintenance" task="purge_memory|flush_dns|empty_trash"/>   → purge 释放内存 / 刷新 DNS / 清空废纸篓
-            6. 使用 Markdown，简洁分节；不要复述原始 JSON；语言跟随用户消息的语言。
+            6. 数据新鲜度工具：若提供的快照可能过期或需要最新数据，单独一行输出 <tool name="snapshot"/> —— 应用会立即回填最新实时摘要让你继续作答。每轮最多使用一次。
+            7. 使用 Markdown，简洁分节（可用表格）；不要复述原始 JSON；语言跟随用户消息的语言。
             """
         }
         return """
@@ -512,10 +513,11 @@ enum PromptBuilder {
            quit=SIGTERM; force_kill=SIGKILL. One tag per pid, only when evidence is clear. Tags are intercepted by the app and executed only after explicit human confirmation (human-in-the-loop) — you can never execute anything yourself.
         3. Reference pids only from the data provided; general knowledge is welcome but state uncertainty explicitly. Never fabricate.
         4. Always advise against terminating critical system processes: kernel_task, WindowServer, mds_stores, logd, sysmond, launchd, trustd, cloudd.
-        5. Beyond terminating processes you may also propose cleanup and maintenance (also user-confirmed):
-           <action action="clean" target="app_caches|logs|dev_caches"/>   → move to Trash (app_caches = application caches; logs; dev_caches = Xcode/npm/gradle dev caches)
-           <action action="maintenance" task="purge_memory|flush_dns|empty_trash"/>   → purge memory / flush DNS / empty Trash
-        6. Use Markdown with concise sections; do not echo raw JSON; follow the user's language.
+           5. Beyond terminating processes you may also propose cleanup and maintenance (also user-confirmed):
+              <action action="clean" target="app_caches|logs|dev_caches"/>   → move to Trash (app_caches = application caches; logs; dev_caches = Xcode/npm/gradle dev caches)
+              <action action="maintenance" task="purge_memory|flush_dns|empty_trash"/>   → purge memory / flush DNS / empty Trash
+           6. Data freshness tool: if the provided snapshot looks stale or you need fresh numbers, output a single line exactly <tool name="snapshot"/> — the app will feed you a fresh live summary and you continue your answer. At most once per turn.
+           7. Use Markdown with concise sections (tables allowed); do not echo raw JSON; follow the user's language.
         """
     }
 
@@ -561,6 +563,42 @@ enum PromptBuilder {
             return "请解释这个进程（它是什么、为什么占 CPU、能否安全终止）：\(json)"
         }
         return "Explain this process (what it is, why it uses CPU, whether it is safe to terminate): \(json)"
+    }
+
+    /// 磁盘分析的用户消息（携带可清理类别聚合与 Top 条目）。
+    static func diskAnalysisUserMessage(freeGB: Double?, items: [DiskCleaner.Item]) -> String {
+        var categories: [String: Any] = [:]
+        for item in items {
+            let key = item.category.rawValue
+            var entry = categories[key] as? [String: Any] ?? ["count": 0, "bytes": 0]
+            entry["count"] = (entry["count"] as? Int ?? 0) + 1
+            entry["bytes"] = (entry["bytes"] as? Int64 ?? 0) + item.sizeBytes
+            categories[key] = entry
+        }
+        let top = items.sorted { $0.sizeBytes > $1.sizeBytes }.prefix(15).map { item -> [String: Any] in
+            ["name": item.name, "category": item.category.rawValue,
+             "size_mb": Int64((Double(item.sizeBytes) / 1_048_576).rounded()),
+             "path": item.url.path]
+        }
+        var payload: [String: Any] = [
+            "total_cleanable_gb": Double((Double(items.reduce(0) { $0 + $1.sizeBytes }) / 1_073_741_824 * 100).rounded() / 100),
+            "categories": categories,
+            "top_items": top
+        ]
+        if let freeGB { payload["disk_free_gb"] = freeGB }
+        let json = payloadJSON(payload)
+        if L10n.current == .zh {
+            return """
+            请分析本机磁盘的可清理空间（以下为扫描到的可再生缓存/日志，均为移入废纸篓且可恢复）：
+            \(json)
+            给出：是否建议清理、清理哪些类别、预估能释放多少空间；若有应执行的清理请输出对应动作标记供我确认。
+            """
+        }
+        return """
+        Please analyze the cleanable disk space below (scanned regenerable caches/logs; all removals go to Trash and are restorable):
+        \(json)
+        Tell me whether to clean, which categories, the estimated reclaim, and emit cleanup action tags for my confirmation if warranted.
+        """
     }
 
     /// 轮间注入的紧凑上下文（控制 token），供后续对话跟踪最新状态。

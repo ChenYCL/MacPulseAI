@@ -17,13 +17,14 @@ struct AppView: View {
     @State private var activePane: Pane = .processes
 
     enum Pane: String, CaseIterable, Identifiable {
-        case processes, disk
+        case processes, disk, ports
         var id: String { rawValue }
 
         var title: String {
             switch self {
             case .processes: return L10n.s("进程", "Processes")
             case .disk: return L10n.s("磁盘", "Disk")
+            case .ports: return L10n.s("端口", "Ports")
             }
         }
     }
@@ -72,8 +73,23 @@ struct AppView: View {
                 }
                 Divider()
                 actionBar
+            } else if activePane == .disk {
+                HStack(spacing: 0) {
+                    DiskView(disk: disk, onAnalyze: {
+                        ensureChatConfigured()
+                        showAIPanel = true
+                        chat.startDiskAnalysis(items: disk.items, freeGBText: disk.freeBytesText)
+                    })
+                    if showAIPanel {
+                        Divider()
+                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
+                                  onClose: { showAIPanel = false })
+                    }
+                }
             } else {
-                DiskView(disk: disk)
+                PortView(chat: chat, configProvider: { store.settings.llmConfig() },
+                         onOpenChat: { ensureChatConfigured(); showAIPanel = true },
+                         monitor: model)
             }
             if let msg = model.statusMessage, activePane == .processes {
                 Divider()
@@ -151,6 +167,21 @@ struct AppView: View {
             summaryChip(L10n.s("用户", "User"), value: model.load.userPercent, color: .blue, icon: "person")
             summaryChip(L10n.s("系统", "Sys"), value: model.load.systemPercent, color: .orange, icon: "gearshape")
             summaryChip(L10n.s("空闲", "Idle"), value: model.load.idlePercent, color: .green, icon: "zzz")
+            if let memPercent = model.memoryUsedPercent {
+                HStack(spacing: 3) {
+                    Image(systemName: "memorychip")
+                    Text(L10n.s("内存", "Mem") + " \(String(format: "%.1f", memPercent))%")
+                }
+                .foregroundColor(memPercent >= 90 ? .red : (memPercent >= 75 ? .orange : .blue))
+            }
+            if let swap = model.swapUsedText {
+                HStack(spacing: 3) {
+                    Image(systemName: "arrow.triangle.swap")
+                    Text(L10n.s("交换", "Swap") + " \(swap)")
+                }
+                .foregroundColor(swap.contains("G") ? .red : .secondary)
+                .help(L10n.s("Swap 使用越多说明物理内存压力越大", "More swap usage means heavier memory pressure"))
+            }
         }
         .font(.callout.monospacedDigit())
     }
@@ -345,8 +376,18 @@ struct AppView: View {
 
     private func runAnalysis() {
         ensureChatConfigured()
-        showAIPanel = true
-        chat.startAnalysis()
+        switch activePane {
+        case .processes:
+            showAIPanel = true
+            chat.startAnalysis()
+        case .disk:
+            showAIPanel = true
+            chat.startDiskAnalysis(items: disk.items, freeGBText: disk.freeBytesText)
+        case .ports:
+            showAIPanel = true
+            chat.send(draft: L10n.s("分析一下当前监听端口里有哪些可能异常的服务",
+                                    "Review the listening ports and flag anything suspicious"))
+        }
     }
 
     private func explainSelected() {

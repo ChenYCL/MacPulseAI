@@ -61,6 +61,7 @@ final class MonitorModel: ObservableObject {
         let l = loadTracker.current()
         load = l
         onLoadUpdate?(l)
+        refreshMemoryStats()
         do {
             latestProcesses = try sampler.sample()
             if isWindowVisible { processes = latestProcesses }
@@ -70,12 +71,44 @@ final class MonitorModel: ObservableObject {
         }
     }
 
+    /// 内存压力：物理内存占用比 + Swap 使用量（sysctl vm.swapusage）。
+    private func refreshMemoryStats() {
+        var stats = vm_statistics64()
+        var size = mach_msg_type_number_t(MemoryLayout<vm_statistics64_data_t>.size / MemoryLayout<integer_t>.size)
+        let host = mach_host_self()
+        let kr = withUnsafeMutablePointer(to: &stats) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(size)) {
+                host_statistics64(host, HOST_VM_INFO64, $0, &size)
+            }
+        }
+        if kr == KERN_SUCCESS {
+            let usedBytes = Double(UInt64(stats.active_count) + UInt64(stats.wire_count)
+                                   + UInt64(stats.compressor_page_count)) * Double(vm_page_size)
+            memoryUsedPercent = (usedBytes / Double(ProcessInfo.processInfo.physicalMemory) * 100 * 10).rounded() / 10
+        }
+
+        var buffer = [CChar](repeating: 0, count: 256)
+        var sz = buffer.count
+        guard sysctlbyname("vm.swapusage", &buffer, &sz, nil, 0) == 0 else { return }
+        let raw = String(cString: buffer) // e.g. "total = 1024.00M used = 512.00M free = 512.00M"
+        guard let range = raw.range(of: #"used\s*=\s*([\d.]+\s*[MG])"#, options: .regularExpression) else {
+            swapUsedText = nil
+            return
+        }
+        swapUsedText = String(raw[range])
+            .components(separatedBy: "=").last?
+            .trimmingCharacters(in: .whitespaces)
+    }
+
     func setWindowVisible(_ visible: Bool) {
         isWindowVisible = visible
         if visible { processes = latestProcesses }
     }
 
     /// 批量终止；结果写入 statusMessage。普通退出（SIGTERM）3 秒后复查，仍存活则提示可强制退出。
+    @Published private(set) var swapUsedText: String?
+    @Published private(set) var memoryUsedPercent: Double?
+
     func terminate(pids: [pid_t], force: Bool) {
         guard !pids.isEmpty else { return }
         var ok = 0

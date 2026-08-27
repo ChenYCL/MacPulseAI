@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// 磁盘管家标签页：可清理类别扫描 + HITL 移入废纸篓 + 系统维护动作。
+/// 磁盘管家标签页：可清理类别扫描 + HITL 移入废纸篓 + 系统维护动作 + AI 分析入口。
 struct DiskView: View {
     @ObservedObject var disk: DiskModel
+    var onAnalyze: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
@@ -34,6 +35,16 @@ struct DiskView: View {
             }
             Button(L10n.s("重新扫描", "Rescan")) { disk.rescan() }
                 .disabled(disk.isScanning)
+            if let onAnalyze {
+                Button {
+                    onAnalyze()
+                } label: {
+                    Label(L10n.s("AI 分析", "AI Analyze"), systemImage: "sparkles")
+                }
+                .disabled(disk.items.isEmpty)
+                .help(L10n.s("让 AI 结合扫描结果给出清理建议（需确认后才执行）",
+                             "Let the AI review scan results (execution still needs your confirmation)"))
+            }
             Button(L10n.s("将选中项移入废纸篓", "Move Selected to Trash")) {
                 disk.trashSelected()
             }

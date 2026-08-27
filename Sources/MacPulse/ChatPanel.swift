@@ -162,7 +162,7 @@ struct MessageBubble: View {
                     if message.content.isEmpty && isStreamingLast {
                         ProgressView().scaleEffect(0.7)
                     } else {
-                        renderMarkdown(message.content)
+                        MarkdownView(markdown: message.content)
                     }
                 }
                 ForEach(message.actions) { proposed in
@@ -188,15 +188,6 @@ struct MessageBubble: View {
             .background(RoundedRectangle(cornerRadius: 9).fill(color))
     }
 
-    private func renderMarkdown(_ s: String) -> some View {
-        let attributed = (try? AttributedString(
-            markdown: s,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
-        return Text(attributed)
-            .font(.callout)
-            .textSelection(.enabled)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
 
     /// HITL 动作卡：AI 提议的终止操作必须由用户点击确认。
     @ViewBuilder

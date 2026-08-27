@@ -66,3 +66,37 @@ tw93 出品的 macOS 效率工具（开源 CLI `mo` + 原生 App，$19 买断 2 
 ## 5. 测试计划
 - 单测：DiskCleaner 大小统计与分类扫描（临时目录注入 home）、移动至废纸篓目录的落点校验、维护 Runner 命令拼装（注入不真执行）、Agent 动作解析新增 kind、system prompt 合约、contextSummary 含磁盘信息。
 - 集成/GUI：mock LLM 回复含 `<action action="clean" .../>` → 面板出现 HITL 卡片 → 确认执行 → 目标类别真实进入废纸篓。
+
+---
+
+## v2.1 用户声音驱动的追加任务（2026-08-27 追加）
+
+### 用户声音收集（GitHub / Twitter / Reddit / 知乎 / CSDN）
+
+| 痛点 | 来源 | 对应动作 |
+|---|---|---|
+| "Address already in use"→ lsof+grep+kill 三步太繁琐，npx kill-port 因此流行 | GitHub Gist / CSDN / Zhihu 高频 | ✅ F11 端口占用查杀标签 |
+| CleanMyMac「订阅贵、终身版缩水、臃肿误删」 | Reddit r/MacOS、知乎、V2EX | 已有定位：开源免费 + review-first + HITL，写入 README |
+| 风扇狂转但活动监视器"抓不到元凶"、kernel_task 占 CPU | r/osx、Apple Discussions、Medium | ✅ 瞬时 CPU 双采样 + AI 解读已在 v1；kernel_task 保护提示在 Agent prompt |
+| AI 输出 Markdown 表格渲染成管道符纯文本 | 用户反馈（本仓库） | ✅ F12 MarkdownView 完整渲染 |
+
+### F11 端口占用查杀（P0，本轮实现）
+- 新「端口」标签：`lsof -nP -iTCP -sTCP:LISTEN` 扫描解析（lsof 输出可注入便于测试），支持按端口/进程/PID 过滤。
+- 行内操作：终止进程（HITL 确认弹窗）、「AI 解释」复用对话解释该 PID。
+
+### F12 Markdown 渲染（P0，本轮实现）
+- 自研 `MarkdownView`：标题/无序有序列表/表格/代码块(带语言标签)/引用/分隔线/**粗体**/`行内代码`。
+- 替换原先 inline-only 的 AttributedString 渲染——AI 输出的 GFM 表格此前渲染成"|进程|判断|"字面量。
+
+### F13 Agent 工具环（P0，本轮实现）
+- 协议：模型可在回复中输出 `<tool name="snapshot"/>` 请求最新实时数据；应用拦截后回填 fresh 进程/系统/磁盘摘要并让模型续答（每轮最多一次，防循环）。
+- 这是受 opencode/codex 等 agent runtime 启发的最小落地：模型驱动 + 应用侧工具执行。
+
+### F14 内存压力显示（P1，本轮实现）
+- 顶部概览新增「内存 xx%」（active+wire+compressor 页 × 页大小）与「交换 xxxM/G」（sysctl vm.swapusage）chip；swap 进入 GB 区间标红。
+
+### 探索项：外部 Agent Runtime（v3 评估中）
+考虑过打包 opencode/codex 运行时作为本地 agent 引擎。v2.1 未采用的原因：
+1. 我们的 HITL 安全模型要求所有副作用经应用内确认卡；引入任意 shell 执行 runtime 会破坏这一保证；
+2. 二进制体积/签名/分发复杂度显著上升。
+演进路线：保持应用内轻量工具环（新增只读工具如 ports/snapshot 已具备），若未来需要深度开发代理能力，评估以"外接 OpenAI 兼容 agent 服务"形式可选启用，而非捆绑分发。

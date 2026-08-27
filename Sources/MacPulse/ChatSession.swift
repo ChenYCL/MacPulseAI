@@ -73,6 +73,19 @@ final class ChatSession: ObservableObject {
         sendInternal(text: label, wireContent: prompt)
     }
 
+    /// 磁盘页的「AI 分析」：携带扫描聚合数据。
+    func startDiskAnalysis(items: [DiskCleaner.Item], freeGBText: String?) {
+        var freeGB: Double?
+        if let text = freeGBText?.trimmingCharacters(in: .whitespaces), !text.isEmpty {
+            // "147.51 GB" → 147.51
+            let numPart = text.components(separatedBy: " ").first ?? ""
+            freeGB = Double(numPart)
+        }
+        let prompt = PromptBuilder.diskAnalysisUserMessage(freeGB: freeGB, items: items)
+        sendInternal(text: L10n.s("分析一下磁盘可清理空间", "Analyze the cleanable disk space"),
+                     wireContent: prompt)
+    }
+
     /// 用户自由输入（对话 kill/追问等）。
     func send(draft text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -225,14 +238,32 @@ final class ChatSession: ObservableObject {
         streamingTask = Task { [weak self] in
             do {
                 guard let self else { return }
-                let finalRaw = try await LLMServiceFactory.service(for: store.settings.llmConfig())
-                    .stream(messages: history) { delta in
+                let service = LLMServiceFactory.service(for: store.settings.llmConfig())
+                var raw = try await service.stream(messages: history) { delta in
+                    Task { @MainActor [weak self] in
+                        guard let self, self.isStreaming else { return }
+                        self.appendToMessage(id: placeholderID, delta: delta)
+                    }
+                }
+
+                // Agent 工具环：模型请求最新实时快照时，回填 fresh 上下文再补一轮作答（最多一次）
+                if Self.requestsSnapshot(raw), !Task.isCancelled {
+                    updateMessage(id: placeholderID) { $0.content = "" } // 清空重来，避免展示工具标记
+                    history.append(.assistant(raw))
+                    let fresh = PromptBuilder.contextSummary(
+                        load: monitor.load,
+                        procs: monitor.processes.sorted { $0.cpuPercent > $1.cpuPercent })
+                        + "\n" + L10n.s("[以上为刚回填的最新实时数据]", "[Fresh live data injected above]")
+                    history.append(.user(fresh))
+                    raw = try await service.stream(messages: history) { delta in
                         Task { @MainActor [weak self] in
                             guard let self, self.isStreaming else { return }
                             self.appendToMessage(id: placeholderID, delta: delta)
                         }
                     }
-                finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(finalRaw))
+                }
+
+                finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(raw))
             } catch is CancellationError {
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(collectPartial(id: placeholderID)))
                 if (messages.last(where: { $0.id == placeholderID })?.content.isEmpty ?? false) {
@@ -311,5 +342,10 @@ final class ChatSession: ObservableObject {
         lines.removeFirst()
         lines.removeLast()
         return lines.joined(separator: "\n")
+    }
+
+    /// 检测模型是否请求了实时快照工具。
+    nonisolated static func requestsSnapshot(_ text: String) -> Bool {
+        text.range(of: #"<tool\s+name\s*=\s*"snapshot"\s*/?>"#, options: .regularExpression) != nil
     }
 }
