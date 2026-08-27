@@ -4,18 +4,18 @@ import Combine
 /// AI 对话会话：多轮消息、流式回复、HITL 动作提议（人确认后才执行终止）。
 @MainActor
 final class ChatSession: ObservableObject {
-    struct ChatMessage: Identifiable {
-        enum Sender { case user, assistant, systemNotice }
-        struct ProposedAction: Identifiable {
+    struct ChatMessage: Identifiable, Codable {
+        enum Sender: String, Codable { case user, assistant, systemNotice }
+        struct ProposedAction: Identifiable, Codable {
             let action: AgentActionParser.Action
             /// 提议时的进程名快照（进程随后退出也能在卡片上显示）。
             var processName: String?
             var state: State
             var resultText: String?
 
-            enum State: Equatable {
+            enum State: String, Codable {
                 case pending          // 等待用户确认
-                case executed(String) // 已执行（含结果文本）
+                case executed         // 已执行（结果在 resultText）
                 case dismissed        // 用户忽略
             }
             var id: String { action.id }
@@ -31,12 +31,12 @@ final class ChatSession: ObservableObject {
             }
         }
 
-        let id = UUID()
-        let sender: Sender
+        var id: UUID = UUID()
+        var sender: Sender
         var content: String
         /// assistant 消息附带的待处理动作（HITL）。
         var actions: [ProposedAction] = []
-        var time = Date()
+        var time: Date = Date()
     }
 
     @Published private(set) var messages: [ChatMessage] = []
@@ -51,6 +51,40 @@ final class ChatSession: ObservableObject {
     private var store: SettingsStore?
     private var systemPrompt: String {
         PromptBuilder.systemPrompt()
+    }
+
+    /// 对话历史落盘位置（默认 App Support/MacPulse/chat_history.json，可注入测试）。
+    private let historyURL: URL?
+    /// 记住用户行为：启动时恢复上次对话（含未完成的 HITL 待确认卡）。
+    private func loadHistory() {
+        guard let url = historyURL,
+              let data = try? Data(contentsOf: url),
+              let decoded = try? JSONDecoder().decode([ChatMessage].self, from: data) else { return }
+        // 丢弃上次异常中断留下的空占位回复
+        messages = decoded.filter { !($0.sender == .assistant && $0.content.isEmpty && $0.actions.isEmpty) }
+        refreshFlagged()
+    }
+
+    /// 在所有改变对话内容的操作后调用，落盘记住用户行为。
+    private func persist() {
+        guard let url = historyURL else { return }
+        let keep = messages.suffix(200)
+        if let data = try? JSONEncoder().encode(Array(keep)) {
+            try? data.write(to: url, options: [.atomic])
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        }
+    }
+
+    init(historyURL: URL? = ChatSession.defaultHistoryURL) {
+        self.historyURL = historyURL
+        loadHistory()
+    }
+
+    nonisolated static var defaultHistoryURL: URL {
+        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+            .appendingPathComponent("MacPulse", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent("chat_history.json")
     }
 
     func configure(monitor: MonitorModel, store: SettingsStore) {
@@ -125,6 +159,30 @@ final class ChatSession: ObservableObject {
         sendInternal(text: L10n.s("AI 查毒：检查剪贴板内容", "Clipboard security review"), wireContent: prompt)
     }
 
+    /// 安全页的「AI 查毒」：系统安全体检 Agent——
+    /// 汇聚进程/监听端口/磁盘/剪贴板发现，识别异常行为并给出可确认的处置动作。
+    func startSecurityAudit() {
+        guard let monitor else { return }
+        let ports = (try? PortScanner.scan()) ?? []
+        let clipText = ClipboardAuditor.currentClipboardText()
+        let findings = ClipboardAuditor.audit(clipText ?? "")
+        let redacted = clipText.map { ClipboardAuditor.redactAll($0) }
+        let freeGB = DiskCleaner.volumeFreeBytes().map { (Double($0) / 1_073_741_824 * 10).rounded() / 10 }
+        let prompt = PromptBuilder.securityAuditUserMessage(
+            load: monitor.load,
+            procs: monitor.processes,
+            ports: ports,
+            freeGB: freeGB,
+            swapText: monitor.swapUsedText,
+            clipboardFindings: findings,
+            clipboardRedacted: clipText == nil ? nil : redacted,
+            includePath: store?.settings.includeProcessPath ?? true,
+            cores: monitor.coreCount
+        )
+        sendInternal(text: L10n.s("安全体检：扫描异常行为与可疑进程", "Security audit: scan for anomalous behavior"),
+                     wireContent: prompt)
+    }
+
     /// 磁盘页的「AI 分析」：携带扫描聚合数据。
     func startDiskAnalysis(items: [DiskCleaner.Item], freeGBText: String?) {
         var freeGB: Double?
@@ -155,6 +213,7 @@ final class ChatSession: ObservableObject {
         messages.removeAll()
         flaggedActions.removeAll()
         lastError = nil
+        persist()
     }
 
     // MARK: 动作执行（HITL 确认后）
@@ -252,6 +311,7 @@ final class ChatSession: ObservableObject {
             }
         }
         refreshFlagged()
+        persist()
     }
 
     // MARK: 内部
@@ -260,6 +320,7 @@ final class ChatSession: ObservableObject {
     /// 初始分析/解释时携带完整快照数据）。
     private func sendInternal(text: String, wireContent: String? = nil) {
         messages.append(ChatMessage(sender: .user, content: text))
+        persist()
         runCompletion(wireContent: wireContent ?? text)
     }
 
@@ -324,6 +385,7 @@ final class ChatSession: ObservableObject {
                 }
 
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(raw))
+                persist()
             } catch is CancellationError {
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(collectPartial(id: placeholderID)))
                 if (messages.last(where: { $0.id == placeholderID })?.content.isEmpty ?? false) {
@@ -336,6 +398,7 @@ final class ChatSession: ObservableObject {
                 }
             }
             isStreaming = false
+            persist()
         }
     }
 
@@ -365,6 +428,7 @@ final class ChatSession: ObservableObject {
             }
         }
         refreshFlagged()
+        persist()
     }
 
     /// 汇总所有仍待确认的 kill 动作，驱动进程表的 AI 标记。
@@ -385,13 +449,16 @@ final class ChatSession: ObservableObject {
     private func markAction(messageID: UUID, actionID: String, result: String) {
         updateMessage(id: messageID) { m in
             if let i = m.actions.firstIndex(where: { $0.id == actionID }) {
-                m.actions[i].state = .executed(result)
+                m.actions[i].state = .executed
+                m.actions[i].resultText = result
             }
         }
+        persist()
     }
 
     private func injectSystemNotice(_ text: String) {
         messages.append(ChatMessage(sender: .systemNotice, content: text))
+        persist()
     }
 
     private func scheduleRecheckNote(pid: pid_t, name: String) {

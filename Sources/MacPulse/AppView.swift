@@ -14,6 +14,8 @@ struct AppView: View {
     @State private var chatConfigured = false
     @StateObject private var chat = ChatSession()
     @AppStorage("chatPanelWidth") private var chatPanelWidth: Double = 460
+    /// Pin 常驻：开启后 AI 对话面板在所有标签页显示，且重启后保持打开。
+    @AppStorage("aiPanelPinned") private var aiPanelPinned = false
     @StateObject private var disk = DiskModel()
     @State private var activePane: Pane = .processes
 
@@ -30,6 +32,8 @@ struct AppView: View {
             }
         }
     }
+
+    private var chatVisible: Bool { showAIPanel || aiPanelPinned }
 
     private var panelWidthBinding: Binding<CGFloat> {
         Binding(get: { CGFloat(chatPanelWidth) },
@@ -85,7 +89,7 @@ struct AppView: View {
             if activePane == .processes {
                 HStack(spacing: 0) {
                     table
-                    if showAIPanel {
+                    if chatVisible {
                         Divider()
                         ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
                                   onClose: { showAIPanel = false },
@@ -99,19 +103,45 @@ struct AppView: View {
                     DiskView(disk: disk, needsConfirm: disk.pendingNeeds,
                              onConfirmNeeds: { disk.confirmPendingNeeds() },
                              onDismissNeeds: { disk.dismissPendingNeeds() })
-                    if showAIPanel {
+                    if chatVisible {
                         Divider()
                         ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
                                   onClose: { showAIPanel = false },
-                                  panelWidth: panelWidthBinding)
+                                  panelWidth: panelWidthBinding,
+                                  pinned: aiPanelPinned,
+                                  onTogglePin: { aiPanelPinned.toggle() })
                     }
                 }
             } else if activePane == .ports {
-                PortView(chat: chat, configProvider: { store.settings.llmConfig() },
-                         onOpenChat: { ensureChatConfigured(); showAIPanel = true },
-                         monitor: model)
+                HStack(spacing: 0) {
+                    PortView(chat: chat, configProvider: { store.settings.llmConfig() },
+                             onOpenChat: { ensureChatConfigured(); showAIPanel = true },
+                             monitor: model)
+                    if chatVisible {
+                        Divider()
+                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
+                                  onClose: { showAIPanel = false },
+                                  panelWidth: panelWidthBinding,
+                                  pinned: aiPanelPinned,
+                                  onTogglePin: { aiPanelPinned.toggle() })
+                    }
+                }
             } else {
-                SecurityView(chat: chat, onOpenChat: { ensureChatConfigured(); showAIPanel = true })
+                HStack(spacing: 0) {
+                    SecurityView(chat: chat, onAnalyze: {
+                        ensureChatConfigured()
+                        showAIPanel = true
+                        chat.startSecurityAudit()
+                    }, onOpenChat: { ensureChatConfigured(); showAIPanel = true })
+                    if chatVisible {
+                        Divider()
+                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
+                                  onClose: { showAIPanel = false },
+                                  panelWidth: panelWidthBinding,
+                                  pinned: aiPanelPinned,
+                                  onTogglePin: { aiPanelPinned.toggle() })
+                    }
+                }
             }
             if let msg = model.statusMessage, activePane == .processes {
                 Divider()
@@ -453,7 +483,7 @@ struct AppView: View {
         case .security:
             showAIPanel = true
             ensureChatConfigured()
-            chat.auditClipboardWithAI()
+            chat.startSecurityAudit()
         }
     }
 

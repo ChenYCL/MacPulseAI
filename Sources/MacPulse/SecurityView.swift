@@ -3,6 +3,7 @@ import SwiftUI
 /// 安全中心：剪贴板安全体检 + AI 查毒 + SafetyGuard 审计日志。
 struct SecurityView: View {
     @ObservedObject var chat: ChatSession
+    let onAnalyze: () -> Void
     let onOpenChat: () -> Void
 
     @State private var findings: [ClipboardAuditor.Finding] = []
@@ -12,12 +13,39 @@ struct SecurityView: View {
     @State private var journal: [SafetyGuard.JournalEntry] = []
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                clipboardCard
-                journalCard
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Button {
+                    onAnalyze()
+                } label: {
+                    Label(L10n.s("AI 查毒（全系统）", "AI Security Audit"), systemImage: "sparkles")
+                }
+                .buttonStyle(.borderedProminent)
+                .tint(.purple)
+                .disabled(chat.isStreaming)
+                .help(L10n.s("AI 汇总进程/监听端口/磁盘/剪贴板做安全体检，处置动作需人工确认",
+                             "AI audits processes, ports, disk and clipboard; proposed actions need your confirmation"))
+                Spacer()
+                if chat.isStreaming {
+                    ProgressView().scaleEffect(0.7)
+                }
+                if let lastCheck {
+                    Text(L10n.s("检查于 \(lastCheck.formatted(date: .omitted, time: .shortened))",
+                                "Checked at \(lastCheck.formatted(date: .omitted, time: .shortened))"))
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                Button(L10n.s("重新体检", "Re-check")) { refresh() }
             }
-            .padding(16)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            Divider()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    clipboardCard
+                    journalCard
+                }
+                .padding(16)
+            }
         }
         .onAppear(perform: refresh)
         .onReceive(NotificationCenter.default.publisher(for: SafetyGuard.JournalChanged.name)) { _ in

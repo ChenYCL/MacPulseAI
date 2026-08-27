@@ -518,7 +518,7 @@ enum PromptBuilder {
     static func systemPrompt() -> String {
         if L10n.current == .zh {
             return """
-            你是 MacPulse AI 的内置系统诊断代理「Pulse」，运行在用户的 macOS 应用内。你的职责：解读进程、分析 CPU/内存/磁盘占用、评估终止与清理风险、提出维护建议，以及**剪贴板内容的安全审查**（识别钓鱼地址、危险命令、泄露的密钥——这是应用「AI 查毒」功能的一部分，属于你的本职工作）。
+            你是 MacPulse AI 的内置系统诊断代理「Pulse」，运行在用户的 macOS 应用内。你的职责：解读进程、分析 CPU/内存/磁盘占用、评估终止与清理风险、提出维护建议，以及**安全审计**（识别异常进程与提权行为、审查监听端口是否可疑、剪贴板内容查毒——钓鱼地址/危险命令/泄露密钥——这是应用「AI 查毒」功能的一部分，属于你的本职工作）。
 
             铁律（必须遵守）：
             1. 只回答与本机系统健康和信息安全相关的问题（进程/性能/维护/剪贴板内容安全）。任何其他话题（写代码、闲聊、新闻等）一律用一两句话礼貌说明超出职责范围，并引导回诊断主题。
@@ -536,7 +536,7 @@ enum PromptBuilder {
             """
         }
         return """
-        You are “Pulse”, the built-in diagnostics agent of the MacPulse AI app running on the user's Mac. Your job: interpret processes, analyze CPU/memory/disk usage, assess termination and cleanup risk, suggest maintenance steps, and perform **clipboard content security reviews** (detecting phishing addresses, dangerous commands, leaked secrets — part of the app's "AI poison check" feature and therefore in scope).
+        You are “Pulse”, the built-in diagnostics agent of the MacPulse AI app running on the user's Mac. Your job: interpret processes, analyze CPU/memory/disk usage, assess termination and cleanup risk, suggest maintenance steps, and perform **security audits** (spot anomalous processes and privilege behavior, review listening ports for suspicious services, clipboard poison check — part of the app's "AI poison check" feature and therefore in scope).
 
         Hard rules:
         1. Only answer questions about this machine's health and information security (processes/performance/maintenance/clipboard content safety). For anything else (coding help, small talk, news), politely say it is out of scope in one or two sentences and steer back to diagnostics.
@@ -632,6 +632,57 @@ enum PromptBuilder {
         \(json)
         Tell me whether to clean, which categories, the estimated reclaim, and emit cleanup action tags for my confirmation if warranted.
         """
+    }
+
+    /// 安全体检的用户消息：进程 + 监听端口 + 磁盘 + 剪贴板发现（如有）。
+    static func securityAuditUserMessage(load: SystemLoad, procs: [ProcSample],
+                                         ports: [PortEntry], freeGB: Double?, swapText: String?,
+                                         clipboardFindings: [ClipboardAuditor.Finding],
+                                         clipboardRedacted: String?, includePath: Bool, cores: Int) -> String {
+        var payload: [String: Any] = [
+            "system": ["user_cpu": round1(load.userPercent),
+                       "system_cpu": round1(load.systemPercent),
+                       "idle_cpu": round1(load.idlePercent),
+                       "cores": cores],
+            "processes": procs.map { processJSON($0, includePath: includePath) },
+            "listening_ports": ports.map { ["port": $0.port, "process": $0.process,
+                                            "pid": Int($0.pid), "address": $0.address] }
+        ]
+        if let freeGB { payload["disk_free_gb"] = freeGB }
+        if let swapText { payload["swap_usage"] = swapText }
+        if !clipboardFindings.isEmpty || clipboardRedacted != nil {
+            payload["clipboard"] = [
+                "local_findings": clipboardFindings.map { ["type": $0.kind.rawValue, "preview": $0.redactedPreview] },
+                "redacted_text": clipboardRedacted ?? ""
+            ]
+        }
+        let json = payloadJSON(payload)
+        if L10n.current == .zh {
+            let user = """
+            请做一次系统安全体检。以下是当前进程快照（含 root 进程）、全部 TCP 监听端口、磁盘与剪贴板发现：
+            \(json)
+            要求输出：
+            ## 可疑行为排序
+            （表格：证据/风险 🔴🟡🟢；无明显异常就直说系统干净，不要编造）
+            ## 逐项解读
+            （重点解释 root 高占用、来源不明的进程与不常见的对外监听端口）
+            ## 解决思路
+            （给出处置方案；若判定应终止/清理，输出对应 <action/> 标记供我确认；不确定处明确说明需要进一步取证）
+            """
+            return user
+        }
+        let userEn = """
+        Please run a security audit. Below are the process snapshot (including root processes), all TCP listening ports, disk and clipboard findings:
+        \(json)
+        Output:
+        ## Suspicious Behavior Ranking
+        (table: evidence / risk 🔴🟡🟢; if the system looks clean, say so plainly — never fabricate)
+        ## Findings Explained
+        (focus on root high-usage, unknown-origin processes and unusual externally-listening ports)
+        ## Remediation
+        (concrete plan; if a process should be terminated or caches cleaned, emit the matching <action/> tags for my confirmation; note explicitly where further evidence is needed)
+        """
+        return userEn
     }
 
     /// 轮间注入的紧凑上下文（控制 token），供后续对话跟踪最新状态。

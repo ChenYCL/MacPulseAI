@@ -7,6 +7,9 @@ struct ChatPanel: View {
     let onClose: () -> Void
     /// 面板宽度（AppView 以 @AppStorage 持久化；左缘把手可拖拽调整）。
     @Binding var panelWidth: CGFloat
+    /// Pin 常驻：开启后所有标签页显示、重启保持。
+    var pinned: Bool = false
+    var onTogglePin: (() -> Void)? = nil
     @State private var dragStartWidth: CGFloat?
     @State private var handleHovering = false
     @State private var copied = false
@@ -94,13 +97,26 @@ struct ChatPanel: View {
                 .buttonStyle(.borderless)
                 .help(L10n.s("复制对话", "Copy transcript"))
             }
-            Button {
-                onClose()
-            } label: {
-                Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+            if let onTogglePin {
+                Button {
+                    onTogglePin()
+                } label: {
+                    Image(systemName: pinned ? "pin.fill" : "pin")
+                        .foregroundColor(pinned ? .purple : .secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(pinned ? L10n.s("已常驻（点击取消）", "Pinned (click to unpin)")
+                             : L10n.s("Pin 常驻：在所有标签页显示并跨重启保持", "Pin: show on all tabs and persist across relaunch"))
             }
-            .buttonStyle(.borderless)
-            .help(L10n.s("关闭面板", "Close panel"))
+            if !pinned {
+                Button {
+                    onClose()
+                } label: {
+                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.s("关闭面板", "Close panel"))
+            }
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -284,7 +300,8 @@ struct MessageBubble: View {
                 }
                 .buttonStyle(.bordered)
                 .controlSize(.small)
-            case .executed(let result):
+            case .executed:
+                let result = proposed.resultText ?? ""
                 Text(L10n.s("已执行", "Executed") + " · \(result)")
                     .font(.caption2)
                     .foregroundColor(result.contains(L10n.s("失败", "failed")) ? .red : .green)

@@ -7,12 +7,12 @@ import Foundation
 ///   <action action="clean" target="app_caches"/>        → 清理类别
 ///   <action action="maintenance" task="purge_memory"/>  → 维护动作
 enum AgentActionParser {
-    enum Kind: String {
+    enum Kind: String, Codable {
         case quit, forceKill = "force_kill"
         case clean, maintenance
     }
 
-    struct Action: Equatable, Identifiable {
+    struct Action: Equatable, Identifiable, Codable {
         let kind: Kind
         let pid: Int32?
         let target: String?
