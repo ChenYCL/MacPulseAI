@@ -88,11 +88,7 @@ struct AppView: View {
                 actionBar
             } else if activePane == .disk {
                 HStack(spacing: 0) {
-                    DiskView(disk: disk, onAnalyze: {
-                        ensureChatConfigured()
-                        showAIPanel = true
-                        chat.startDiskAnalysis(items: disk.items, freeGBText: disk.freeBytesText)
-                    })
+                    DiskView(disk: disk)
                     if showAIPanel {
                         Divider()
                         ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
@@ -146,11 +142,12 @@ struct AppView: View {
             Button {
                 runAnalysis()
             } label: {
-                Label(L10n.s("AI 分析", "AI Analyze"), systemImage: "sparkles")
+                Label(analyzeButtonTitle, systemImage: "sparkles")
             }
             .buttonStyle(.borderedProminent)
             .tint(.purple)
-            .disabled(model.processes.isEmpty || chat.isStreaming)
+            .disabled(analyzeDisabled)
+            .help(analyzeHelp)
             Picker(L10n.s("刷新", "Refresh"), selection: $model.refreshInterval) {
                 ForEach([1.0, 2.0, 5.0], id: \.self) { v in
                     Text(L10n.s(String(format: "%.0f 秒", v), String(format: "%.0fs", v))).tag(v)
@@ -398,6 +395,29 @@ struct AppView: View {
         NSPasteboard.general.setString(lines.joined(separator: "\n"), forType: .string)
         model.setStatus(L10n.s("已复制 \(lines.count) 条进程信息",
                                "Copied \(lines.count) process record(s)"))
+    }
+
+    private var analyzeButtonTitle: String {
+        switch activePane {
+        case .processes: return L10n.s("AI 分析", "AI Analyze")
+        case .disk: return L10n.s("AI 分析磁盘", "Analyze Disk")
+        case .ports: return L10n.s("AI 分析端口", "Analyze Ports")
+        }
+    }
+
+    private var analyzeHelp: String {
+        switch activePane {
+        case .processes: return L10n.s("结合最新进程快照给出分析与终止建议（需确认）",
+                                       "Analyze the latest process snapshot (termination needs your confirmation)")
+        case .disk: return L10n.s("结合扫描结果评估可清理项（清理需确认）",
+                                  "Review scanned items (cleanup needs your confirmation)")
+        case .ports: return L10n.s("让 AI 审查监听端口是否可疑",
+                                   "Let the AI review listening ports")
+        }
+    }
+
+    private var analyzeDisabled: Bool {
+        chat.isStreaming || (activePane == .processes && model.processes.isEmpty)
     }
 
     private func runAnalysis() {
