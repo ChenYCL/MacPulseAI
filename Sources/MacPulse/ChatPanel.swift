@@ -27,15 +27,21 @@ struct ChatPanel: View {
             dragHandle
             VStack(alignment: .leading, spacing: 0) {
                 header
+                    .background(
+                        LinearGradient(colors: [.purple.opacity(0.10), .purple.opacity(0.02)],
+                                       startPoint: .leading, endPoint: .trailing)
+                    )
                 Divider()
                 messages
                 Divider()
                 inputBar
+                    .background(Color(nsColor: .controlBackgroundColor))
             }
             .frame(maxWidth: .infinity)
         }
         .frame(width: panelWidth)
         .background(Color(nsColor: .textBackgroundColor))
+        .transition(.move(edge: .trailing).combined(with: .opacity))
     }
 
     /// 左缘拖拽把手：左右拖动调整面板宽度（320–860pt），双击恢复默认。
@@ -249,7 +255,7 @@ struct MessageBubble: View {
         content()
             .padding(8)
             .frame(maxWidth: 400, alignment: alignment == .trailing ? .trailing : .leading)
-            .background(RoundedRectangle(cornerRadius: 9).fill(color))
+            .background(RoundedRectangle(cornerRadius: 9).fill(color).shadow(color: .black.opacity(0.05), radius: 2, y: 1))
     }
 
 

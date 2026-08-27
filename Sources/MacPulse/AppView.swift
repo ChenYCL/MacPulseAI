@@ -145,13 +145,15 @@ struct AppView: View {
             }
             if let msg = model.statusMessage, activePane == .processes {
                 Divider()
-                Text(msg)
-                    .font(.caption)
-                    .foregroundColor(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 4)
-                    .textSelection(.enabled)
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle.fill").foregroundColor(.blue)
+                    Text(msg).font(.caption).foregroundColor(.secondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 4)
+                .background(Color(nsColor: .controlBackgroundColor))
+                .textSelection(.enabled)
             }
         }
         .frame(minWidth: 980, minHeight: 600)
@@ -179,73 +181,119 @@ struct AppView: View {
 
     private var header: some View {
         HStack(spacing: 12) {
-            Image(systemName: "bolt.heart.fill").foregroundColor(.pink)
-            Text("MacPulse AI").font(.headline)
-            Spacer()
-            cpuSummary
+            // 品牌
+            HStack(spacing: 7) {
+                Image(systemName: "bolt.heart.fill")
+                    .font(.system(size: 15))
+                    .foregroundColor(.white)
+                    .frame(width: 26, height: 26)
+                    .background(
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(LinearGradient(colors: [.pink, .purple],
+                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
+                    )
+                VStack(alignment: .leading, spacing: 0) {
+                    Text("MacPulse AI").font(.headline)
+                    Text(L10n.s("AI 进程管家", "AI Process Manager"))
+                        .font(.system(size: 9)).foregroundColor(.secondary)
+                }
+            }
+
+            // 统计卡
+            HStack(spacing: 6) {
+                statCard(L10n.s("用户", "USER"),
+                         value: String(format: "%.1f%%", model.load.userPercent),
+                         icon: "person.fill", tint: .blue)
+                statCard(L10n.s("系统", "SYS"),
+                         value: String(format: "%.1f%%", model.load.systemPercent),
+                         icon: "gearshape.fill", tint: .orange)
+                statCard(L10n.s("空闲", "IDLE"),
+                         value: String(format: "%.1f%%", model.load.idlePercent),
+                         icon: "zzz", tint: .green)
+                statCard(L10n.s("内存", "MEM"),
+                         value: model.memoryUsedPercent.map { String(format: "%.1f%%", $0) } ?? "--",
+                         icon: "memorychip", tint: .indigo,
+                         warn: (model.memoryUsedPercent ?? 0) >= 85)
+                if let swap = model.swapUsedText {
+                    statCard(L10n.s("交换", "SWAP"), value: swap,
+                             icon: "arrow.triangle.swap", tint: .red, warn: true)
+                        .help(L10n.s("Swap 使用越多说明物理内存压力越大",
+                                     "More swap usage means heavier memory pressure"))
+                }
+            }
+
+            Spacer(minLength: 8)
+
             Button {
                 runAnalysis()
             } label: {
                 Label(analyzeButtonTitle, systemImage: "sparkles")
+                    .padding(.horizontal, 4)
             }
             .buttonStyle(.borderedProminent)
             .tint(.purple)
+            .shadow(color: .purple.opacity(0.30), radius: 5, y: 2)
             .disabled(analyzeDisabled)
             .help(analyzeHelp)
+
             Picker(L10n.s("刷新", "Refresh"), selection: $model.refreshInterval) {
                 ForEach([1.0, 2.0, 5.0], id: \.self) { v in
                     Text(L10n.s(String(format: "%.0f 秒", v), String(format: "%.0fs", v))).tag(v)
                 }
             }
             .pickerStyle(.segmented)
-            .frame(width: 190)
+            .frame(width: 172)
             .help(L10n.s("自动刷新间隔", "Auto refresh interval"))
-            Button {
-                model.isPaused.toggle()
-            } label: {
-                Label(model.isPaused ? L10n.s("继续", "Resume") : L10n.s("暂停", "Pause"),
-                      systemImage: model.isPaused ? "play.fill" : "pause.fill")
-            }
-            Button {
-                showSettings = true
-            } label: {
-                Label(L10n.s("设置", "Settings"), systemImage: "gearshape")
+
+            HStack(spacing: 4) {
+                iconHeaderButton(model.isPaused ? "play.fill" : "pause.fill",
+                                 help: model.isPaused ? L10n.s("继续刷新", "Resume") : L10n.s("暂停刷新", "Pause")) {
+                    model.isPaused.toggle()
+                }
+                iconHeaderButton("gearshape", help: L10n.s("设置", "Settings")) {
+                    showSettings = true
+                }
             }
         }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.bar)
     }
 
-    private var cpuSummary: some View {
-        HStack(spacing: 10) {
-            summaryChip(L10n.s("用户", "User"), value: model.load.userPercent, color: .blue, icon: "person")
-            summaryChip(L10n.s("系统", "Sys"), value: model.load.systemPercent, color: .orange, icon: "gearshape")
-            summaryChip(L10n.s("空闲", "Idle"), value: model.load.idlePercent, color: .green, icon: "zzz")
-            if let memPercent = model.memoryUsedPercent {
-                HStack(spacing: 3) {
-                    Image(systemName: "memorychip")
-                    Text(L10n.s("内存", "Mem") + " \(String(format: "%.1f", memPercent))%")
-                }
-                .foregroundColor(memPercent >= 90 ? .red : (memPercent >= 75 ? .orange : .blue))
-            }
-            if let swap = model.swapUsedText {
-                HStack(spacing: 3) {
-                    Image(systemName: "arrow.triangle.swap")
-                    Text(L10n.s("交换", "Swap") + " \(swap)")
-                }
-                .foregroundColor(swap.contains("G") ? .red : .secondary)
-                .help(L10n.s("Swap 使用越多说明物理内存压力越大", "More swap usage means heavier memory pressure"))
-            }
+    private func iconHeaderButton(_ systemImage: String, help: String,
+                                  action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .font(.system(size: 12, weight: .medium))
+                .frame(width: 30, height: 26)
         }
-        .font(.callout.monospacedDigit())
+        .buttonStyle(.bordered)
+        .help(help)
     }
 
-    private func summaryChip(_ title: String, value: Double, color: Color, icon: String) -> some View {
-        HStack(spacing: 3) {
+    /// 统计卡：彩色圆底图标 + 标签 + 等宽数值。
+    private func statCard(_ title: String, value: String, icon: String,
+                          tint: Color, warn: Bool = false) -> some View {
+        HStack(spacing: 6) {
             Image(systemName: icon)
-            Text("\(title) \(String(format: "%.1f", value))%")
+                .font(.system(size: 10, weight: .semibold))
+                .foregroundColor(.white)
+                .frame(width: 18, height: 18)
+                .background(Circle().fill(tint.opacity(warn ? 0.9 : 0.75)))
+            VStack(alignment: .leading, spacing: 0) {
+                Text(title).font(.system(size: 9, weight: .medium))
+                    .foregroundColor(.secondary)
+                    .tracking(0.5)
+                Text(value)
+                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
+                    .foregroundColor(warn ? tint : .primary)
+                    .lineLimit(1)
+            }
         }
-        .foregroundColor(color)
+        .padding(.horizontal, 9)
+        .padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
+        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.06)))
     }
 
     // MARK: 进程表
@@ -255,12 +303,17 @@ struct AppView: View {
             TableColumn(L10n.s("进程", "Process"), value: \.name) { p in procCell(p) }
                 .width(min: 240, ideal: 360)
             TableColumn("%CPU", value: \.cpuPercent) { p in
-                Text(String(format: "%.1f", p.cpuPercent))
-                    .foregroundColor(cpuColor(p.cpuPercent))
-                    .fontWeight(p.cpuPercent >= store.settings.cpuHighlightThreshold ? .bold : .regular)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
+                HStack(spacing: 6) {
+                    Text(String(format: "%.1f", p.cpuPercent))
+                        .monospacedDigit()
+                        .foregroundColor(cpuColor(p.cpuPercent))
+                        .fontWeight(p.cpuPercent >= store.settings.cpuHighlightThreshold ? .bold : .regular)
+                        .frame(width: 44, alignment: .trailing)
+                    cpuBar(p.cpuPercent)
+                }
+                .frame(maxWidth: .infinity, alignment: .trailing)
             }
-            .width(min: 70, ideal: 90)
+            .width(min: 110, ideal: 140)
             TableColumn(L10n.s("内存", "Memory"), value: \.rssBytes) { p in
                 Text(Self.memoryString(p.rssBytes))
                     .frame(maxWidth: .infinity, alignment: .trailing)
@@ -317,6 +370,25 @@ struct AppView: View {
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// CPU 迷你条：按核心占比绘制（多核 >100% 时满条高亮）。
+    private func cpuBar(_ cpu: Double) -> some View {
+        let ratio = min(cpu / (Double(model.coreCount) * 100), 1)
+        let singleCoreRatio = min(cpu / 100, 1)
+        let fillWidth = max(2, 44 * singleCoreRatio)
+        return ZStack(alignment: .leading) {
+            Capsule().fill(Color.primary.opacity(0.07))
+            Capsule()
+                .fill(cpuColor(cpu).opacity(0.85))
+                .frame(width: max(2, 44 * ratio))
+            if cpu >= 100 {
+                Capsule().strokeBorder(Color.red.opacity(0.5), lineWidth: 1)
+            }
+        }
+        .frame(width: 44, height: 5)
+        .help("\(String(format: "%.1f", cpu))% · \(Int(singleCoreRatio * 100))% of one core")
+        _ = fillWidth
     }
 
     private func cpuColor(_ cpu: Double) -> Color {
