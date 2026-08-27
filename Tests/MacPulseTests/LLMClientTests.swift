@@ -11,69 +11,18 @@ final class LLMClientTests: XCTestCase {
 
     override func tearDown() {
         L10n.forced = nil
-        StubURLProtocol.reset()
+        SharedStubURLProtocol.reset()
         super.tearDown()
     }
 
-    /// URLProtocol 桩：拦截 URLSession 请求，可捕获请求并返回预设响应。
-    final class StubURLProtocol: URLProtocol {
-        nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-        nonisolated(unsafe) static var lastRequest: URLRequest?
+    private func stubbedSession() -> URLSession { sharedStubbedSession() }
 
-        override class func canInit(with request: URLRequest) -> Bool { true }
-        override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
-
-        override func startLoading() {
-            Self.lastRequest = request
-            guard let handler = Self.handler else {
-                client?.urlProtocol(self, didFailWithError: URLError(.unsupportedURL))
-                return
-            }
-            do {
-                let (resp, data) = try handler(request)
-                client?.urlProtocol(self, didReceive: resp, cacheStoragePolicy: .notAllowed)
-                client?.urlProtocol(self, didLoad: data)
-                client?.urlProtocolDidFinishLoading(self)
-            } catch {
-                client?.urlProtocol(self, didFailWithError: error)
-            }
-        }
-
-        override func stopLoading() {}
-
-        static func body(of request: URLRequest) -> Data {
-            if let d = request.httpBody { return d }
-            guard let stream = request.httpBodyStream else { return Data() }
-            stream.open()
-            defer { stream.close() }
-            var data = Data()
-            let bufSize = 16_384
-            var buf = [UInt8](repeating: 0, count: bufSize)
-            while stream.hasBytesAvailable {
-                let n = stream.read(&buf, maxLength: bufSize)
-                if n <= 0 { break }
-                data.append(buf, count: n)
-            }
-            return data
-        }
-
-        static func reset() { handler = nil; lastRequest = nil }
-    }
-
-    private func stubbedSession() -> URLSession {
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.protocolClasses = [StubURLProtocol.self]
-        return URLSession(configuration: cfg)
-    }
-
-    private func httpResponse(_ url: URL, code: Int) -> HTTPURLResponse {
-        HTTPURLResponse(url: url, statusCode: code, httpVersion: "HTTP/1.1", headerFields: nil)!
-    }
+    private func httpResponse(_ url: URL, code: Int) -> HTTPURLResponse { sharedResponse(url, code: code) }
 
     // MARK: OpenAI 兼容
 
     func testOpenAISendsBearerAndParsesContent() async throws {
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             let data = """
             {"choices":[{"index":0,"message":{"role":"assistant","content":"你好，这是分析结果"}}]}
             """.data(using: .utf8)!
@@ -89,11 +38,11 @@ final class LLMClientTests: XCTestCase {
         ]) { _ in }
 
         XCTAssertEqual(result, "你好，这是分析结果")
-        let req = try XCTUnwrap(StubURLProtocol.lastRequest)
+        let req = try XCTUnwrap(SharedStubURLProtocol.lastRequest)
         XCTAssertEqual(req.url?.absoluteString, "https://api.example.com/v1/chat/completions")
         XCTAssertEqual(req.value(forHTTPHeaderField: "Authorization"), "Bearer sk-test")
 
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubURLProtocol.body(of: req)) as? [String: Any])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: SharedStubURLProtocol.body(of: req)) as? [String: Any])
         XCTAssertEqual(body["model"] as? String, "test-model")
         XCTAssertTrue((body["stream"] as? Bool) == true || (body["stream"] as? Int) == nil,
                       "流式标志应存在")
@@ -106,7 +55,7 @@ final class LLMClientTests: XCTestCase {
     }
 
     func testOpenAICompleteSendsSystemAndUserAndParses() async throws {
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             let data = #"{"choices":[{"message":{"content":"pong"}}]}"#.data(using: .utf8)!
             return (self.httpResponse(req.url!, code: 200), data)
         }
@@ -116,14 +65,14 @@ final class LLMClientTests: XCTestCase {
         let result = try await service.complete(system: "sys", user: "usr")
         XCTAssertEqual(result, "pong")
 
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubURLProtocol.body(of: XCTUnwrap(StubURLProtocol.lastRequest))) as? [String: Any])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: SharedStubURLProtocol.body(of: XCTUnwrap(SharedStubURLProtocol.lastRequest))) as? [String: Any])
         XCTAssertEqual(body["max_tokens"] as? Int, 4096)
         let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
         XCTAssertEqual(messages.count, 2)
     }
 
     func testOpenAIHTTPErrorSurfacesStatusAndBody() async throws {
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             let data = #"{"error":{"message":"Incorrect API key"}}"#.data(using: .utf8)!
             return (self.httpResponse(req.url!, code: 401), data)
         }
@@ -144,7 +93,7 @@ final class LLMClientTests: XCTestCase {
     // MARK: Anthropic
 
     func testAnthropicSendsHeadersExtractsSystemAndParsesTextBlocks() async throws {
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             let data = """
             {"content":[{"type":"thinking","thinking":"想一想"},{"type":"text","text":"部分一"},{"type":"text","text":"，部分二"}]}
             """.data(using: .utf8)!
@@ -159,12 +108,12 @@ final class LLMClientTests: XCTestCase {
         ]) { _ in }
 
         XCTAssertEqual(result, "部分一，部分二", "thinking 块不应混入正文")
-        let req = try XCTUnwrap(StubURLProtocol.lastRequest)
+        let req = try XCTUnwrap(SharedStubURLProtocol.lastRequest)
         XCTAssertEqual(req.url?.absoluteString, "https://api.anthropic.com/v1/messages")
         XCTAssertEqual(req.value(forHTTPHeaderField: "x-api-key"), "sk-ant-test")
         XCTAssertEqual(req.value(forHTTPHeaderField: "anthropic-version"), "2023-06-01")
 
-        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: StubURLProtocol.body(of: req)) as? [String: Any])
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(with: SharedStubURLProtocol.body(of: req)) as? [String: Any])
         XCTAssertEqual(body["model"] as? String, "claude-sonnet-4-5")
         XCTAssertEqual(body["max_tokens"] as? Int, 4096)
         XCTAssertEqual(body["system"] as? String, "系统提示词", "system 消息应抽取到顶层 system 参数")
@@ -174,7 +123,7 @@ final class LLMClientTests: XCTestCase {
     }
 
     func testAnthropicBaseURLWithV1DoesNotDuplicate() async throws {
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             let data = #"{"content":[{"type":"text","text":"ok"}]}"#.data(using: .utf8)!
             return (self.httpResponse(req.url!, code: 200), data)
         }
@@ -182,11 +131,11 @@ final class LLMClientTests: XCTestCase {
                                apiKey: "k", model: "m")
         let service = AnthropicService(config: config, session: stubbedSession())
         _ = try await service.complete(system: "s", user: "u")
-        XCTAssertEqual(StubURLProtocol.lastRequest?.url?.absoluteString, "https://gw.example.com/v1/messages")
+        XCTAssertEqual(SharedStubURLProtocol.lastRequest?.url?.absoluteString, "https://gw.example.com/v1/messages")
     }
 
     func testAnthropicEmptyContentThrows() async throws {
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             let data = #"{"content":[]}"#.data(using: .utf8)!
             return (self.httpResponse(req.url!, code: 200), data)
         }
@@ -211,7 +160,7 @@ final class LLMClientTests: XCTestCase {
 
     func testAnthropicRetriesWithLargerMaxTokensOnReasoningOnly() async throws {
         let counter = Counter()
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             switch counter.next() {
             case 1:
                 let data = #"{"content":[{"type":"thinking","thinking":"让我想一想…"}],"stop_reason":"max_tokens"}"#.data(using: .utf8)!
@@ -230,13 +179,13 @@ final class LLMClientTests: XCTestCase {
         XCTAssertEqual(result, "最终分析结果")
         XCTAssertEqual(counter.n, 2, "应在 thinking-only 后自动重试一次")
         let body = try XCTUnwrap(JSONSerialization.jsonObject(
-            with: StubURLProtocol.body(of: XCTUnwrap(StubURLProtocol.lastRequest))) as? [String: Any])
+            with: SharedStubURLProtocol.body(of: XCTUnwrap(SharedStubURLProtocol.lastRequest))) as? [String: Any])
         XCTAssertEqual(body["max_tokens"] as? Int, 8192, "重试时 max_tokens 应翻倍")
     }
 
     func testAnthropicReasoningOnlyExhaustsRetryThrowsGuidance() async throws {
         let counter = Counter()
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             _ = counter.next()
             let data = #"{"content":[{"type":"thinking","thinking":"思考内容片段"}],"stop_reason":"max_tokens"}"#.data(using: .utf8)!
             return (self.httpResponse(req.url!, code: 200), data)
@@ -255,7 +204,7 @@ final class LLMClientTests: XCTestCase {
     }
 
     func testOpenAIEmptyContentWithReasoningContentThrowsGuidance() async throws {
-        StubURLProtocol.handler = { req in
+        SharedStubURLProtocol.handler = { req in
             let data = """
             {"choices":[{"finish_reason":"length","message":{"role":"assistant","content":"","reasoning_content":"openai 风格推理"}}]}
             """.data(using: .utf8)!

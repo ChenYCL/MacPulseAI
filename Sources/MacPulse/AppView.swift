@@ -41,19 +41,32 @@ struct AppView: View {
         .padding(.vertical, 6)
     }
 
+    private var flaggedPIDs: Set<Int32> {
+        Set(chat.flaggedActions.compactMap(\.pid))
+    }
+
+    /// 排序：AI 建议终止的进程强制置顶；同组内沿用用户选择的列排序。
+    private var sortedByFlagThenOrder: ([ProcSample], [ProcSample]) {
+        let sorted = model.processes.sorted(using: sortOrder)
+        return ChatSession.prioritySplit(sorted, flaggedPIDs: flaggedPIDs)
+    }
+
     private var filteredProcesses: [ProcSample] {
         let q = searchText.trimmingCharacters(in: .whitespaces)
-        let base: [ProcSample]
-        if q.isEmpty {
-            base = model.processes
-        } else {
-            base = model.processes.filter {
+        let flagFirst = activePane == .processes && showAIPanel
+        let (top, rest) = sortedByFlagThenOrder
+
+        func filter(_ list: [ProcSample]) -> [ProcSample] {
+            guard !q.isEmpty else { return list }
+            return list.filter {
                 $0.name.localizedCaseInsensitiveContains(q)
                     || $0.path.localizedCaseInsensitiveContains(q)
                     || String($0.pid).contains(q)
             }
         }
-        return base.sorted(using: sortOrder)
+
+        let base = filter(top) + filter(rest)
+        return base
     }
 
     var body: some View {
@@ -232,14 +245,27 @@ struct AppView: View {
         }
     }
 
+    @ViewBuilder
     private func procCell(_ p: ProcSample) -> some View {
+        let isFlagged = flaggedPIDs.contains(p.pid)
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 6) {
                 if p.state == "R" {
                     Circle().fill(Color.orange).frame(width: 6, height: 6)
                         .help(L10n.s("正在运行", "Running"))
                 }
-                Text(p.name).fontWeight(.medium)
+                Text(p.name)
+                    .fontWeight(.medium)
+                    .foregroundColor(isFlagged ? .red : .primary)
+                if isFlagged {
+                    Text("AI")
+                        .font(.caption2.bold())
+                        .foregroundColor(.white)
+                        .padding(.horizontal, 4)
+                        .padding(.vertical, 1)
+                        .background(Capsule().fill(Color.purple))
+                        .help(L10n.s("AI 建议终止——见右侧对话中的确认卡", "AI suggests terminating — see the confirmation card in the chat panel"))
+                }
             }
             if !p.path.isEmpty, p.path != p.name {
                 Text(p.path)

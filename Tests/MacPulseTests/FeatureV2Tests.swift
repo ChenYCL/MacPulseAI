@@ -135,3 +135,86 @@ final class FeatureV2Tests: XCTestCase {
         XCTAssertEqual(top.first?["name"] as? String, "A", "按大小降序 DerivedData 应在前")
     }
 }
+
+    // MARK: SSE 协议加固（对照官方流式文档）
+
+    func testAnthropicMidStreamErrorEventThrows() async throws {
+        SharedStubURLProtocol.handler = { req in
+            let sse = """
+            event: message_start
+            data: {"type":"message_start"}
+
+            event: error
+            data: {"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}
+
+            """.data(using: .utf8)!
+            return (sharedResponse(req.url!, code: 200), sse)
+        }
+        let config = LLMConfig(provider: .anthropic, baseURL: "https://api.anthropic.com", apiKey: "k", model: "m")
+        let service = AnthropicService(config: config, session: sharedStubbedSession())
+        L10n.forced = .en
+        defer { L10n.forced = nil }
+        do {
+            _ = try await service.stream(messages: [.user("u")]) { _ in }
+            XCTFail("应当抛出错误")
+        } catch let error as LLMError {
+            guard case .invalidResponse(let detail) = error else { return XCTFail("期望 invalidResponse，实际 \(error)") }
+            XCTAssertTrue(detail.contains("overloaded_error"))
+            XCTAssertTrue(detail.contains("Overloaded"))
+        }
+    }
+
+    func testOpenAIMidStreamErrorPayloadThrows() async throws {
+        SharedStubURLProtocol.handler = { req in
+            let sse = """
+            data: {"error":{"message":"server exploded","type":"server_error"}}
+
+            """.data(using: .utf8)!
+            return (sharedResponse(req.url!, code: 200), sse)
+        }
+        let config = LLMConfig(provider: .openAICompatible, baseURL: "https://gw.example.com/v1", apiKey: "k", model: "m")
+        let service = OpenAIService(config: config, session: sharedStubbedSession())
+        L10n.forced = .en
+        defer { L10n.forced = nil }
+        do {
+            _ = try await service.stream(messages: [.user("u")]) { _ in }
+            XCTFail("应当抛出错误")
+        } catch let error as LLMError {
+            guard case .invalidResponse(let detail) = error else { return XCTFail("期望 invalidResponse，实际 \(error)") }
+            XCTAssertTrue(detail.contains("server exploded"))
+        }
+    }
+
+    // MARK: HITL 表格联动
+
+    private func proc(_ pid: Int32, cpu: Double) -> ProcSample {
+        ProcSample(pid: pid, name: "p\(pid)", path: "", user: "light", uid: 501,
+                   isOwnedByMe: true, cpuPercent: cpu, memPercent: 1,
+                   rssBytes: 1024 * 1024, threads: 1, state: "S")
+    }
+
+    func testPrioritySplitPutsFlaggedFirstPreservingOrder() {
+        // 列排序已按 CPU 降序：pid2(100) > pid3(50) > pid1(10)
+        let items = [proc(2, cpu: 100), proc(3, cpu: 50), proc(1, cpu: 10)]
+        let (top, rest) = ChatSession.prioritySplit(items, flaggedPIDs: [3])
+        XCTAssertEqual(top.map(\.pid), [3])
+        XCTAssertEqual(rest.map(\.pid), [2, 1], "未标记项保持列排序顺序")
+    }
+
+    func testPrioritySplitEmptyFlagsReturnsOriginalOrder() {
+        let items = [proc(5, cpu: 9), proc(6, cpu: 1)]
+        let (top, rest) = ChatSession.prioritySplit(items, flaggedPIDs: [])
+        XCTAssertTrue(top.isEmpty)
+        XCTAssertEqual(rest.map(\.pid), [5, 6])
+    }
+
+    func testProposedActionDisplayTitle() {
+        var proposed = ChatSession.ChatMessage.ProposedAction(
+            action: .init(kind: .forceKill, pid: 33_584),
+            processName: "node", state: .pending)
+        XCTAssertTrue(proposed.displayTitle().contains("node"))
+        XCTAssertTrue(proposed.displayTitle().contains("33,584"))
+
+        proposed.processName = nil
+        XCTAssertEqual(proposed.displayTitle(), "PID 33584")
+    }

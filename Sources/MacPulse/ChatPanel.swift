@@ -197,21 +197,37 @@ struct MessageBubble: View {
             case .quit: return L10n.s("退出进程", "Quit process")
             case .forceKill: return L10n.s("强制退出", "Force quit")
             case .clean:
-                return L10n.s("清理缓存 (\(proposed.action.target ?? ""))",
-                              "Clean caches (\(proposed.action.target ?? ""))")
+                return L10n.s("清理缓存", "Clean caches")
             case .maintenance:
-                return L10n.s("执行维护 (\(proposed.action.target ?? ""))",
-                              "Run maintenance (\(proposed.action.target ?? ""))")
+                return L10n.s("执行维护", "Run maintenance")
             }
         }()
+        let signalHelp: String = {
+            switch proposed.action.kind {
+            case .quit: return "SIGTERM · \(L10n.s("温和，可保存数据后退出", "graceful, allows saving"))"
+            case .forceKill: return "SIGKILL · \(L10n.s("立即终止，可能丢数据", "immediate, may lose data"))"
+            default: return ""
+            }
+        }()
+        let targetText = proposed.action.target ?? proposed.displayTitle()
+        let isDestructive = proposed.action.kind == .forceKill
         HStack(spacing: 8) {
-            Image(systemName: proposed.action.kind == .forceKill ? "xmark.octagon.fill" : "xmark.circle")
-                .foregroundColor(proposed.action.kind == .forceKill ? .red : .orange)
-            Text(L10n.s("AI 建议执行：", "AI suggests:"))
-                .font(.caption)
-            Text(kindLabel)
-                .font(.caption)
-                .fontWeight(.semibold)
+            Image(systemName: isDestructive ? "xmark.octagon.fill" : "wrench.and.screwdriver.fill")
+                .foregroundColor(isDestructive ? .red : .orange)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(L10n.s("AI 建议执行：", "AI suggests:")).font(.caption).foregroundColor(.secondary)
+                    Text(kindLabel).font(.caption).fontWeight(.semibold)
+                    if !targetText.isEmpty {
+                        Text(targetText)
+                            .font(.caption.monospacedDigit())
+                            .textSelection(.enabled)
+                    }
+                }
+                if !signalHelp.isEmpty {
+                    Text(signalHelp).font(.caption2).foregroundColor(.secondary)
+                }
+            }
             Spacer()
             switch proposed.state {
             case .pending:

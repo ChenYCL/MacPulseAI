@@ -8,6 +8,8 @@ final class ChatSession: ObservableObject {
         enum Sender { case user, assistant, systemNotice }
         struct ProposedAction: Identifiable {
             let action: AgentActionParser.Action
+            /// 提议时的进程名快照（进程随后退出也能在卡片上显示）。
+            var processName: String?
             var state: State
             var resultText: String?
 
@@ -17,6 +19,16 @@ final class ChatSession: ObservableObject {
                 case dismissed        // 用户忽略
             }
             var id: String { action.id }
+
+            /// 卡片主文案：进程名 + PID。
+            func displayTitle() -> String {
+                if let name = processName {
+                    return L10n.s("\(name) (PID \(action.pid ?? -1))",
+                                  "\(name) (PID \(action.pid ?? -1))")
+                }
+                if let pid = action.pid { return "PID \(pid)" }
+                return action.target ?? ""
+            }
         }
 
         let id = UUID()
@@ -29,6 +41,8 @@ final class ChatSession: ObservableObject {
 
     @Published private(set) var messages: [ChatMessage] = []
     @Published private(set) var isStreaming = false
+    /// AI 提议中（pending）的终止动作对应 PID —— 进程表据此标红并置顶排序。
+    @Published private(set) var flaggedActions: [AgentActionParser.Action] = []
     @Published private(set) var lastError: String?
     @Published var draft = ""
 
@@ -101,6 +115,7 @@ final class ChatSession: ObservableObject {
     func clear() {
         streamingTask?.cancel()
         messages.removeAll()
+        flaggedActions.removeAll()
         lastError = nil
     }
 
@@ -192,6 +207,7 @@ final class ChatSession: ObservableObject {
                 m.actions[i].state = .dismissed
             }
         }
+        refreshFlagged()
     }
 
     // MARK: 内部
@@ -291,13 +307,35 @@ final class ChatSession: ObservableObject {
         messages.first(where: { $0.id == id })?.content ?? ""
     }
 
-    /// 完成后解析动作标记：正文剥离标记、生成 HITL 卡片。
+    /// 完成后解析动作标记：正文剥离标记、生成 HITL 卡片（附提议时的进程名），
+    /// 同时把建议的 PID 联动到进程表（标红 + 置顶）。
     private func finishAssistant(id: UUID, rawText: String) {
         let (clean, actions) = AgentActionParser.parse(rawText)
         updateMessage(id: id) { m in
             m.content = clean
-            m.actions = actions.map { .init(action: $0, state: .pending) }
+            m.actions = actions.map { action in
+                let name = action.pid.flatMap { pid in
+                    monitor?.processes.first(where: { $0.pid == pid })?.name
+                }
+                return .init(action: action, processName: name, state: .pending)
+            }
         }
+        refreshFlagged()
+    }
+
+    /// 汇总所有仍待确认的 kill 动作，驱动进程表的 AI 标记。
+    private func refreshFlagged() {
+        var seenPIDs = Set<Int32>()
+        var result: [AgentActionParser.Action] = []
+        for message in messages where message.sender == .assistant {
+            for proposed in message.actions
+            where proposed.state == .pending && proposed.action.kind != .maintenance {
+                guard let pid = proposed.action.pid, !seenPIDs.contains(pid) else { continue }
+                seenPIDs.insert(pid)
+                result.append(proposed.action)
+            }
+        }
+        flaggedActions = result
     }
 
     private func markAction(messageID: UUID, actionID: String, result: String) {
@@ -347,5 +385,17 @@ final class ChatSession: ObservableObject {
     /// 检测模型是否请求了实时快照工具。
     nonisolated static func requestsSnapshot(_ text: String) -> Bool {
         text.range(of: #"<tool\s+name\s*=\s*"snapshot"\s*/?>"#, options: .regularExpression) != nil
+    }
+
+    /// 表格联动排序：flagged 进程置顶，其余保持原有顺序。
+    nonisolated static func prioritySplit(_ items: [ProcSample],
+                                          flaggedPIDs: Set<Int32>) -> (top: [ProcSample], rest: [ProcSample]) {
+        guard !flaggedPIDs.isEmpty else { return ([], items) }
+        var top: [ProcSample] = []
+        var rest: [ProcSample] = []
+        for p in items {
+            if flaggedPIDs.contains(p.pid) { top.append(p) } else { rest.append(p) }
+        }
+        return (top, rest)
     }
 }

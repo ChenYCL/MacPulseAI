@@ -387,14 +387,21 @@ struct SSEAccumulator {
     var text = ""
     var reasoning = ""
     var stopReason: String?
+    /// 流中段的显式错误事件（Anthropic `error` event / OpenAI 兼容 `data:{"error":...}`）。
+    var streamError: String?
     var onDelta: ((String) -> Void)?
 
     mutating func absorbOpenAIChunk(jsonData: String) throws {
         let trimmed = jsonData.trimmingCharacters(in: .whitespaces)
         guard !trimmed.isEmpty, trimmed != "[DONE]" else { return }
         guard let data = trimmed.data(using: .utf8),
-              let chunk = try? JSONDecoder().decode(OpenAIStreamChunk.self, from: data),
-              let choice = chunk.choices?.first else { return }
+              let chunk = try? JSONDecoder().decode(OpenAIStreamChunk.self, from: data) else { return }
+        // 兼容网关在流中报告错误（无 choices 仅 error 对象）
+        if let errBody = chunk.error?.error?.message ?? chunk.error?.message {
+            streamError = streamError ?? errBody
+            return
+        }
+        guard let choice = chunk.choices?.first else { return }
         if let d = choice.delta?.content, !d.isEmpty {
             text += d
             onDelta?(d)
@@ -415,14 +422,25 @@ struct SSEAccumulator {
             if let th = event.delta?.thinking, !th.isEmpty { reasoning += th }
         case "message_delta":
             if let sr = event.delta?.stop_reason { stopReason = sr }
+        case "error":
+            // 官方协议：流中失败以独立 error 事件呈现（如 overloaded_error），而非 HTTP 状态码
+            if let msg = event.error?.message {
+                streamError = (streamError ?? "") + "[\(event.error?.type ?? "error")] \(msg)"
+            } else {
+                streamError = streamError ?? "unknown stream error"
+            }
         default:
+            // ping / message_start / *_block_stop 等事件按协议忽略即可
             break
         }
     }
 
-    /// 结束时判定正文；思考-only/截断等情况抛出可操作的错误。
+    /// 结束时判定正文；思考-only/截断/流中错误等情况抛出可操作的错误。
     func finalize() throws -> String {
         if !text.isEmpty { return text }
+        if let errText = streamError {
+            throw LLMError.invalidResponse(errText)
+        }
         if !reasoning.isEmpty { throw LLMError.reasoningOnly(reasoning) }
         if stopReason == "max_tokens" || stopReason == "length" {
             throw LLMError.reasoningOnly(L10n.s("（响应因 max_tokens 截断）", "(response truncated by max_tokens)"))
@@ -439,8 +457,13 @@ struct AnthropicStreamEvent: Decodable {
         let thinking: String?
         let stop_reason: String?
     }
+    struct ErrorBody: Decodable {
+        let type: String?
+        let message: String?
+    }
     let type: String?
     let delta: Delta?
+    let error: ErrorBody?
 }
 
 /// OpenAI 流块结构。
@@ -453,7 +476,17 @@ struct OpenAIStreamChunk: Decodable {
         let finish_reason: String?
         let delta: Delta?
     }
+    struct ErrorPayload: Decodable {
+        struct Body: Decodable { let message: String?; let type: String? }
+        let message: String?
+        let type: String?
+        let error: Body?
+
+        var bestMessage: String? { error?.message ?? message }
+        var bestType: String? { error?.type ?? type }
+    }
     let choices: [Choice]?
+    let error: ErrorPayload?
 }
 
 // MARK: - Prompt 构建（Agent 角色，主题锁定）
@@ -544,13 +577,13 @@ enum PromptBuilder {
             return """
             请分析当前系统占用。以下是按 CPU 降序的进程快照 JSON（macOS，\(cores) 逻辑核心）：
             \(json)
-            如有应终止的进程请输出对应动作标记供我确认。
+            要求：若判定任何具体进程应终止，必须在结论后逐个输出 <action/> 动作标记供我确认（系统关键进程除外）；不需要终止则可不输出。
             """
         }
         return """
         Please analyze the current CPU usage. Below is the process snapshot JSON sorted by CPU descending (macOS, \(cores) logical cores):
         \(json)
-        If any process should be terminated, emit the corresponding action tags for my confirmation.
+        Requirement: if you conclude any specific process should be terminated, output one <action/> tag per process after your conclusions (except critical system processes); omit tags if nothing should be terminated.
         """
     }
 
