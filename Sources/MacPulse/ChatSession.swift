@@ -60,8 +60,8 @@ final class ChatSession: ObservableObject {
         guard let url = historyURL,
               let data = try? Data(contentsOf: url),
               let decoded = try? JSONDecoder().decode([ChatMessage].self, from: data) else { return }
-        // 丢弃上次异常中断留下的空占位回复
-        messages = decoded.filter { !($0.sender == .assistant && $0.content.isEmpty && $0.actions.isEmpty) }
+        // 丢弃上次异常中断留下的空占位回复（否则会被渲染成永远旋转的等待指示器）
+        messages = decoded.filter { !Self.isGhostAssistant($0) }
         refreshFlagged()
     }
 
@@ -472,9 +472,8 @@ final class ChatSession: ObservableObject {
                 persist()
             } catch is CancellationError {
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(collectPartial(id: placeholderID)))
-                if (messages.last(where: { $0.id == placeholderID })?.content.isEmpty ?? false) {
-                    removeMessage(id: placeholderID)
-                }
+                // 用户主动中止：静默清掉空占位，不报“模型没返回内容”
+                pruneEmptyAssistant(id: placeholderID, note: nil)
             } catch {
                 if isStreaming {
                     removeMessage(id: placeholderID)
@@ -564,7 +563,36 @@ final class ChatSession: ObservableObject {
                     self.continueStream(injecting: note, afterCleaning: id, depth: depth + 1)
                 }
             }
+            return
         }
+
+        // 流已收尾且既无正文也无动作卡：丢弃空占位，避免留下永远转圈的幽灵气泡。
+        pruneEmptyAssistant(id: id, note: Self.emptyReplyNotice)
+    }
+
+    /// 移除内容与动作都为空的 assistant 占位消息，并把原因暴露给用户。
+    /// 空占位若留在列表里会被渲染成一直旋转的等待指示器（看起来像卡死）。
+    /// `note` 传 nil 表示用户主动中止，不需要报错。
+    @discardableResult
+    func pruneEmptyAssistant(id: UUID, note: String?) -> Bool {
+        guard let m = messages.first(where: { $0.id == id }), Self.isGhostAssistant(m) else { return false }
+        removeMessage(id: id)
+        if let note, lastError == nil { lastError = note }
+        persist()
+        return true
+    }
+
+    /// 幽灵占位：assistant 且既无可见正文也无 HITL 动作卡。
+    /// 这类消息在 UI 上无法与「正在流式输出」区分，必须清理而不是渲染成等待动画。
+    nonisolated static func isGhostAssistant(_ m: ChatMessage) -> Bool {
+        m.sender == .assistant
+            && m.actions.isEmpty
+            && m.content.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    nonisolated static var emptyReplyNotice: String {
+        L10n.s("模型本次没有返回任何内容，请重试或换个模型。",
+               "The model returned no content this time — retry or switch models.")
     }
 
     /// 工具结果回填后的一轮流式续答（追加到同一占位气泡）。

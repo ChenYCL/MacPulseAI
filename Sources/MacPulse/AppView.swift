@@ -226,7 +226,8 @@ struct AppView: View {
             TableColumn(L10n.s("用户", "User"), value: \.user)
                 .width(min: 60, ideal: 90)
             TableColumn("PID", value: \.pid) { p in
-                Text("\(p.pid)").monospacedDigit()
+                // verbatim：PID 是标识符不是数量，不能被本地化成 “31,823”
+                Text(verbatim: String(p.pid)).monospacedDigit()
             }
             .width(min: 60, ideal: 80)
         }

@@ -235,11 +235,12 @@ struct MarkdownView: View, Equatable {
                     .padding(.leading, 8)
             }
         case .table(let header, let rows):
+            let weights = Self.columnWeights(header: header, rows: rows)
             VStack(alignment: .leading, spacing: 0) {
-                gridRow(cells: header.map { inline($0) }, isHeader: true)
+                gridRow(cells: header.map { inline($0) }, weights: weights, isHeader: true)
                 Divider()
                 ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    gridRow(cells: row.map { inline($0) }, isHeader: false)
+                    gridRow(cells: row.map { inline($0) }, weights: weights, isHeader: false)
                     Divider().opacity(0.35)
                 }
             }
@@ -249,14 +250,43 @@ struct MarkdownView: View, Equatable {
         }
     }
 
-    private func gridRow(cells: [AttributedString], isHeader: Bool) -> some View {
+    /// 按各列内容的显示宽度分配列宽比例。
+    /// 等分会把「证据」这类长文本列压成细长条（一个字一行），既难读又拖慢文本排版。
+    /// CJK 与 emoji 按双倍宽度计，权重再夹到 [0.6, 3.0] 防止某一列吃掉整行。
+    static func columnWeights(header: [String], rows: [[String]]) -> [Double] {
+        let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
+        guard columnCount > 0 else { return [] }
+        var widths = [Double](repeating: 0, count: columnCount)
+        for row in [header] + rows {
+            for (i, cell) in row.enumerated() where i < columnCount {
+                widths[i] = max(widths[i], displayWidth(cell))
+            }
+        }
+        let average = max(1, widths.reduce(0, +) / Double(columnCount))
+        return widths.map { min(3.0, max(0.6, $0 / average)) }
+    }
+
+    /// 近似显示宽度：CJK / emoji 记 2，其余记 1。
+    static func displayWidth(_ s: String) -> Double {
+        s.unicodeScalars.reduce(0) { total, scalar in
+            let v = scalar.value
+            let wide = (0x1100...0x115F).contains(v) || (0x2E80...0xA4CF).contains(v)
+                || (0xAC00...0xD7A3).contains(v) || (0xF900...0xFAFF).contains(v)
+                || (0xFE30...0xFE6F).contains(v) || (0xFF00...0xFF60).contains(v)
+                || (0x1F300...0x1FAFF).contains(v)
+            return total + (wide ? 2 : 1)
+        }
+    }
+
+    private func gridRow(cells: [AttributedString], weights: [Double], isHeader: Bool) -> some View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(Array(cells.enumerated()), id: \.offset) { idx, cell in
                 Text(cell)
                     .font(isHeader ? .callout.bold() : .callout)
-                    .frame(minWidth: 60, maxWidth: .infinity, alignment: .leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
+                    .layoutPriority(idx < weights.count ? weights[idx] : 1)
                 if idx < cells.count - 1 {
                     Divider()
                 }

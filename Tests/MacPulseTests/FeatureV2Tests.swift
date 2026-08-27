@@ -134,7 +134,6 @@ final class FeatureV2Tests: XCTestCase {
         let top = try XCTUnwrap(obj["top_items"] as? [[String: Any]])
         XCTAssertEqual(top.first?["name"] as? String, "A", "按大小降序 DerivedData 应在前")
     }
-}
 
     // MARK: SSE 协议加固（对照官方流式文档）
 
@@ -213,7 +212,9 @@ final class FeatureV2Tests: XCTestCase {
             action: .init(kind: .forceKill, pid: 33_584),
             processName: "node", state: .pending)
         XCTAssertTrue(proposed.displayTitle().contains("node"))
-        XCTAssertTrue(proposed.displayTitle().contains("33,584"))
+        // PID 是标识符：不得出现千分位分组
+        XCTAssertTrue(proposed.displayTitle().contains("33584"))
+        XCTAssertFalse(proposed.displayTitle().contains("33,584"))
 
         proposed.processName = nil
         XCTAssertEqual(proposed.displayTitle(), "PID 33584")
@@ -228,3 +229,70 @@ final class FeatureV2Tests: XCTestCase {
         XCTAssertEqual(ChatPanel.minWidth, 320)
         XCTAssertEqual(ChatPanel.maxWidth, 860)
     }
+
+    // MARK: 空回复不得渲染成永久 loading
+
+    /// 回归：流正常结束但模型没吐任何内容时，占位气泡会被当成「正在输出」而永远转圈。
+    func testGhostAssistantDetection() {
+        let ghost = ChatSession.ChatMessage(sender: .assistant, content: "")
+        XCTAssertTrue(ChatSession.isGhostAssistant(ghost), "空 assistant 占位必须被识别为幽灵消息")
+
+        let whitespaceGhost = ChatSession.ChatMessage(sender: .assistant, content: "  \n\t ")
+        XCTAssertTrue(ChatSession.isGhostAssistant(whitespaceGhost), "只有空白字符同样是幽灵消息")
+
+        let withText = ChatSession.ChatMessage(sender: .assistant, content: "分析完成")
+        XCTAssertFalse(ChatSession.isGhostAssistant(withText))
+
+        // 纯动作提议（正文被标记剥空）是合法回复，卡片本身就是内容，不能删
+        let actionOnly = ChatSession.ChatMessage(
+            sender: .assistant, content: "",
+            actions: [.init(action: .init(kind: .forceKill, pid: 42), processName: "node", state: .pending)])
+        XCTAssertFalse(ChatSession.isGhostAssistant(actionOnly), "只有动作卡的回复必须保留")
+
+        let emptyUser = ChatSession.ChatMessage(sender: .user, content: "")
+        XCTAssertFalse(ChatSession.isGhostAssistant(emptyUser), "只处理 assistant 侧")
+    }
+
+    /// 回归：历史里遗留的幽灵消息在加载时就要被清掉，否则重启后依旧转圈。
+    @MainActor
+    func testLoadHistoryDropsGhostAssistant() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat_ghost_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+
+        let stored: [ChatSession.ChatMessage] = [
+            .init(sender: .user, content: "分析一下当前系统占用"),
+            .init(sender: .assistant, content: ""),
+            .init(sender: .user, content: "再看一次"),
+            .init(sender: .assistant, content: "已完成分析")
+        ]
+        try JSONEncoder().encode(stored).write(to: url)
+
+        let session = ChatSession(historyURL: url)
+        XCTAssertEqual(session.messages.count, 3, "幽灵占位应在加载时被丢弃")
+        XCTAssertFalse(session.messages.contains { ChatSession.isGhostAssistant($0) })
+        XCTAssertEqual(session.messages.last?.content, "已完成分析")
+    }
+
+    // MARK: Markdown 表格列宽
+
+    /// 长文本列应拿到明显更高的布局权重，短列（序号/风险）被压缩。
+    func testTableColumnWeights() {
+        let header = ["#", "发现", "证据", "风险"]
+        let rows: [[String]] = [
+            ["1", "未知 Python 进程全网卡监听 ：47898（pid 61480）",
+             "地址为 *:47898（对所有接口可见）；进程只有 1 线程", "🟡 需取证"],
+        ]
+        let w = MarkdownView.columnWeights(header: header, rows: rows)
+        XCTAssertEqual(w.count, 4)
+        XCTAssertGreaterThan(w[2], w[0], "证据列权重必须高于序号列")
+        XCTAssertGreaterThan(w[2], w[3], "长文本列必须比状态列宽")
+        XCTAssertEqual(w[3], 0.6, accuracy: 0.001, "最短列被夹到下限")
+        XCTAssertLessThan(w[2], 3.001, "单列不能超过上限")
+
+        XCTAssertEqual(MarkdownView.columnWeights(header: [], rows: []), [], "空表安全")
+        XCTAssertEqual(MarkdownView.displayWidth("证据"), 4.0, "CJK 记双倍宽")
+        XCTAssertEqual(MarkdownView.displayWidth("ab"), 2.0)
+        XCTAssertEqual(MarkdownView.displayWidth("🟡中"), 4.0, "emoji 记双倍宽")
+    }
+}

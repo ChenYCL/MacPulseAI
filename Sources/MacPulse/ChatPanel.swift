@@ -164,6 +164,7 @@ struct ChatPanel: View {
                     ForEach(chat.messages) { m in
                         MessageBubble(message: m,
                                       availableWidth: geo.size.width,
+                                      isStreamingThis: chat.isStreaming && m.id == chat.messages.last?.id,
                                       onExecute: { chat.execute(action: $0, in: m.id) },
                                       onDismiss: { chat.dismiss(action: $0, in: m.id) })
                             .equatable()
@@ -179,15 +180,20 @@ struct ChatPanel: View {
             .onChange(of: chat.messages.count) { _ in
                 withAnimation { proxy.scrollTo(chat.messages.last?.id, anchor: .bottom) }
             }
-            .onChange(of: lastAssistantLength) { _ in
+            .onChange(of: streamScrollTick) { _ in
+                // 仅在流式输出时跟随滚动；粒度按 chunk 而非逐 token，避免抢用户的滚动
+                guard chat.isStreaming else { return }
                 proxy.scrollTo(chat.messages.last?.id, anchor: .bottom)
             }
         }
         }
     }
 
-    private var lastAssistantLength: Int {
-        chat.messages.last(where: { $0.sender == .assistant })?.content.count ?? 0
+    /// 流式跟随滚动的节流刻度：每积累一段内容才推进一次，
+    /// 逐 token 触发 scrollTo 会让用户手动滚动时被反复拽回底部。
+    private var streamScrollTick: Int {
+        guard chat.isStreaming, let last = chat.messages.last, last.sender == .assistant else { return 0 }
+        return last.content.utf8.count / 96
     }
 
     private var inputBar: some View {
@@ -222,15 +228,18 @@ struct ChatPanel: View {
 struct MessageBubble: View, Equatable {
     let message: ChatSession.ChatMessage
     let availableWidth: CGFloat
+    /// 该气泡是否正处于流式输出中（只有它才允许显示等待旋转）。
+    var isStreamingThis: Bool = false
     let onExecute: (AgentActionParser.Action) -> Void
     let onDismiss: (AgentActionParser.Action) -> Void
 
     /// 性能：进程监控每 2 秒刷新会触发父视图 body 重算；
-    /// 只有消息内容/动作状态/宽度真正变化时才重绘气泡（长 Markdown 报告尤其昂贵）。
+    /// 只有消息内容/动作状态/宽度/流式态真正变化时才重绘气泡（长 Markdown 报告尤其昂贵）。
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message.id == rhs.message.id
             && lhs.message.content == rhs.message.content
             && lhs.availableWidth == rhs.availableWidth
+            && lhs.isStreamingThis == rhs.isStreamingThis
             && lhs.message.actions.map(\.state) == rhs.message.actions.map(\.state)
             && lhs.message.actions.map(\.resultText) == rhs.message.actions.map(\.resultText)
     }
@@ -268,8 +277,19 @@ struct MessageBubble: View, Equatable {
                 }
             case .assistant:
                 bubble(color: Color(nsColor: .controlBackgroundColor), alignment: .leading) {
-                    if message.content.isEmpty && isStreamingLast {
-                        ProgressView().scaleEffect(0.7)
+                    if message.content.isEmpty {
+                        if isStreamingThis {
+                            HStack(spacing: 6) {
+                                ProgressView().scaleEffect(0.7)
+                                Text(L10n.s("思考中…", "Thinking…"))
+                                    .font(.caption).foregroundColor(.secondary)
+                            }
+                        } else {
+                            // 流已结束仍无内容（如历史遗留的异常占位）：给出明确状态而非永久转圈
+                            Text(L10n.s("（本次回复为空，可能被取消或模型未返回内容）",
+                                        "(Empty reply — cancelled or the model returned nothing)"))
+                                .font(.caption).foregroundColor(.secondary)
+                        }
                     } else {
                         MarkdownView(markdown: message.content)
                     }
@@ -304,11 +324,6 @@ struct MessageBubble: View, Equatable {
     }
 
     @Environment(\.openURL) private var openURL
-
-    private var isStreamingLast: Bool {
-        // 空内容仅可能在刚建立占位时出现
-        true
-    }
 
     private func bubble<Content: View>(color: Color, alignment: HorizontalAlignment,
                                        @ViewBuilder content: () -> Content) -> some View {

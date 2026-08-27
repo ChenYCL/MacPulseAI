@@ -105,7 +105,8 @@ struct PortView: View {
     private func row(_ e: PortEntry) -> some View {
         let isSelected = (selected?.id == e.id)
         return HStack(spacing: 12) {
-            Text("\(e.port)")
+            // verbatim：端口号是标识符，不能被本地化成 “47,898”
+            Text(verbatim: String(e.port))
                 .font(.title3.monospacedDigit().bold())
                 .frame(width: 70, alignment: .trailing)
             Text(e.address).font(.caption.monospacedDigit()).foregroundColor(.secondary).frame(width: 150, alignment: .leading)
