@@ -13,7 +13,18 @@ struct AppView: View {
     @State private var aiState: AIState = .idle
     @State private var pendingForcePIDs: [pid_t]?
 
-    enum AIState: Equatable { case idle, loading, done(String), failed(String) }
+    enum AIState: Equatable {
+        case idle
+        /// 请求进行中；携带已收到的增量文本（流式实时渲染）。
+        case loading(String)
+        case done(String)
+        case failed(String)
+
+        var isBusy: Bool {
+            if case .loading = self { return true }
+            return false
+        }
+    }
 
     private var filteredProcesses: [ProcSample] {
         let q = searchText.trimmingCharacters(in: .whitespaces)
@@ -83,7 +94,7 @@ struct AppView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.purple)
-            .disabled(model.processes.isEmpty || aiState == .loading)
+            .disabled(model.processes.isEmpty || aiState.isBusy)
             Picker(L10n.s("刷新", "Refresh"), selection: $model.refreshInterval) {
                 ForEach([1.0, 2.0, 5.0], id: \.self) { v in
                     Text(L10n.s(String(format: "%.0f 秒", v), String(format: "%.0fs", v))).tag(v)
@@ -261,7 +272,7 @@ struct AppView: View {
             } label: {
                 Label(L10n.s("AI 解释", "Explain"), systemImage: "questionmark.bubble")
             }
-            .disabled(selection.isEmpty || aiState == .loading)
+            .disabled(selection.isEmpty || aiState.isBusy)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -328,14 +339,19 @@ struct AppView: View {
     }
 
     private func performAI(_ prompt: (system: String, user: String)) {
-        aiState = .loading
+        aiState = .loading("")
         showAIPanel = true
         let config = store.settings.llmConfig()
         Task {
             do {
                 let service = LLMServiceFactory.service(for: config)
-                let text = try await service.complete(system: prompt.system, user: prompt.user)
-                aiState = .done(Self.normalizedModelOutput(text))
+                let finalText = try await service.stream(system: prompt.system, user: prompt.user) { delta in
+                    Task { @MainActor in
+                        guard case .loading(let acc) = aiState else { return }
+                        aiState = .loading(acc + delta)
+                    }
+                }
+                aiState = .done(Self.normalizedModelOutput(finalText))
             } catch {
                 aiState = .failed(error.localizedDescription)
             }
@@ -412,12 +428,29 @@ struct AIPanel: View {
                         "Click “AI Analyze” for an overall analysis, or select a row and click “Explain”.\n\nAI only provides suggestions; it never performs any action."))
                 .foregroundColor(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        case .loading:
-            VStack(spacing: 12) {
-                ProgressView()
-                Text(L10n.s("正在请求模型…", "Requesting model…")).font(.callout).foregroundColor(.secondary)
+        case .loading(let partial):
+            VStack(spacing: 10) {
+                if partial.isEmpty {
+                    VStack(spacing: 12) {
+                        ProgressView()
+                        Text(L10n.s("正在请求模型…", "Requesting model…"))
+                            .font(.callout).foregroundColor(.secondary)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                } else {
+                    HStack(spacing: 8) {
+                        ProgressView().controlSize(.small)
+                        Text(L10n.s("正在生成…", "Generating…"))
+                            .font(.caption).foregroundColor(.secondary)
+                        Spacer()
+                    }
+                    ScrollView {
+                        Text(renderMarkdown(partial))
+                            .textSelection(.enabled)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
         case .failed(let message):
             VStack(alignment: .leading, spacing: 8) {
                 Label(L10n.s("请求失败", "Request failed"), systemImage: "exclamationmark.triangle.fill").foregroundColor(.red)

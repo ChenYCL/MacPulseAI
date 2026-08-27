@@ -66,29 +66,66 @@ class Handler(BaseHTTPRequestHandler):
         n = count_processes(payload)
         text = MOCK_MD.replace("{N}", str(max(n, 1)))
 
-        if self.path.endswith("/chat/completions"):
-            self._reply({
-                "id": "mock-chat-1",
-                "object": "chat.completion",
-                "model": payload.get("model", "mock"),
-                "choices": [{
-                    "index": 0,
-                    "finish_reason": "stop",
-                    "message": {"role": "assistant", "content": text},
-                }],
-            })
-        elif self.path.endswith("/v1/messages") or self.path.endswith("/messages"):
-            self._reply({
-                "id": "msg_mock_1",
-                "type": "message",
-                "role": "assistant",
-                "model": payload.get("model", "mock"),
-                "content": [{"type": "text", "text": text}],
-                "stop_reason": "end_turn",
-            })
-        else:
-            self.send_response(404)
-            self.end_headers()
+        if not payload.get("stream"):
+            if self.path.endswith("/chat/completions"):
+                self._reply({
+                    "id": "mock-chat-1",
+                    "object": "chat.completion",
+                    "model": payload.get("model", "mock"),
+                    "choices": [{
+                        "index": 0,
+                        "finish_reason": "stop",
+                        "message": {"role": "assistant", "content": text},
+                    }],
+                })
+            elif self.path.endswith("/v1/messages") or self.path.endswith("/messages"):
+                self._reply({
+                    "id": "msg_mock_1",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": payload.get("model", "mock"),
+                    "content": [{"type": "text", "text": text}],
+                    "stop_reason": "end_turn",
+                })
+            else:
+                self.send_response(404)
+                self.end_headers()
+            return
+
+        # 流式：SSE 分块输出
+        self.send_response(200)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+        chunks = [text[i:i + 24] for i in range(0, len(text), 24)] or ["."]
+        try:
+            if self.path.endswith("/chat/completions"):
+                for c in chunks:
+                    evt = {"choices": [{"delta": {"content": c}, "finish_reason": None}]}
+                    self.wfile.write(b"data: " + json.dumps(evt, ensure_ascii=False).encode("utf-8") + b"\n\n")
+                    self.wfile.flush()
+                end = {"choices": [{"delta": {}, "finish_reason": "stop"}]}
+                self.wfile.write(b"data: " + json.dumps(end).encode() + b"\n\n")
+                self.wfile.write(b"data: [DONE]\n\n")
+            else:
+                first = {"type": "message_start", "message": {"role": "assistant"}}
+                self.wfile.write(b"event: message_start\ndata: " + json.dumps(first).encode() + b"\n\n")
+                blk = {"type": "content_block_start", "index": 0,
+                       "content_block": {"type": "text", "text": ""}}
+                self.wfile.write(b"event: content_block_start\ndata: " + json.dumps(blk).encode() + b"\n\n")
+                for c in chunks:
+                    evt = {"type": "content_block_delta", "index": 0,
+                           "delta": {"type": "text_delta", "text": c}}
+                    self.wfile.write(b"event: content_block_delta\ndata: "
+                                     + json.dumps(evt, ensure_ascii=False).encode("utf-8") + b"\n\n")
+                    self.wfile.flush()
+                end = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}}
+                self.wfile.write(b"event: message_delta\ndata: " + json.dumps(end).encode() + b"\n\n")
+                stop = {"type": "message_stop"}
+                self.wfile.write(b"event: message_stop\ndata: {}\n\n")
+            self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
     def log_message(self, *args):
         pass

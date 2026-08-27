@@ -40,8 +40,12 @@ enum LLMError: LocalizedError {
 }
 
 protocol LLMServicing {
-    /// 发送一次补全请求，返回模型文本输出。
+    /// 非流式补全（一次性返回）。适合轻量探测（如「测试连接」）。
     func complete(system: String, user: String) async throws -> String
+
+    /// 流式补全：每收到增量通过 onDelta 回调（增量片段），最终返回拼接后的完整文本。
+    /// 思考型模型 max_tokens 截断时自动翻倍重试一次；请求保持长连接，不被网关长时间静默掐断。
+    func stream(system: String, user: String, onDelta: @escaping (String) -> Void) async throws -> String
 }
 
 enum LLMServiceFactory {
@@ -71,12 +75,14 @@ struct OpenAIChatRequest: Encodable {
     let model: String
     let temperature: Double
     let max_tokens: Int
+    let stream: Bool
     let messages: [Message]
 
-    init(model: String, temperature: Double, maxTokens: Int, messages: [Message]) {
+    init(model: String, temperature: Double, maxTokens: Int, stream: Bool, messages: [Message]) {
         self.model = model
         self.temperature = temperature
         self.max_tokens = maxTokens
+        self.stream = stream
         self.messages = messages
     }
 }
@@ -104,6 +110,67 @@ final class OpenAIService: LLMServicing {
         self.session = session
     }
 
+    /// 流式补全：SSE 逐块回调；网关不支持流式时自动回落普通 JSON 解析；
+    /// 思考型模型 max_tokens 截断时自动翻倍重试一次。
+    func stream(system: String, user: String, onDelta: @escaping (String) -> Void) async throws -> String {
+        do {
+            return try await streamOnce(maxTokens: 4096, system: system, user: user, onDelta: onDelta)
+        } catch LLMError.reasoningOnly {
+            return try await streamOnce(maxTokens: 8192, system: system, user: user, onDelta: onDelta)
+        }
+    }
+
+    private func streamOnce(maxTokens: Int, system: String, user: String, onDelta: @escaping (String) -> Void) async throws -> String {
+        let base = try normalizedBase(config.baseURL)
+        guard let url = URL(string: base + "/chat/completions") else { throw LLMError.badURL(config.baseURL) }
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 600
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        if !config.apiKey.isEmpty {
+            req.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        }
+        req.httpBody = try JSONEncoder().encode(
+            OpenAIChatRequest(model: config.model,
+                              temperature: 0.3,
+                              maxTokens: maxTokens,
+                              stream: true,
+                              messages: [.init(role: "system", content: system),
+                                         .init(role: "user", content: user)])
+        )
+
+        let (bytes, response) = try await session.bytes(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            var body = ""
+            for try await line in bytes.lines { body += line }
+            throw LLMError.http(http.statusCode, body)
+        }
+
+        var acc = SSEAccumulator()
+        acc.onDelta = onDelta
+        var sawData = false
+        var nonSSEBuffer = ""
+        for try await line in bytes.lines {
+            if line.hasPrefix("data:") {
+                sawData = true
+                try acc.absorbOpenAIChunk(jsonData: String(line.dropFirst(5)))
+            } else if !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                nonSSEBuffer += line
+            }
+        }
+        // 网关不支持流式时回落为普通 JSON 解析
+        if !sawData {
+            if let data = nonSSEBuffer.data(using: .utf8),
+               let decoded = try? JSONDecoder().decode(OpenAIChatResponse.self, from: data) {
+                if let content = decoded.choices.first?.message.content, !content.isEmpty { return content }
+                if let reasoning = decoded.choices.first?.message.reasoning_content, !reasoning.isEmpty {
+                    throw LLMError.reasoningOnly(reasoning)
+                }
+            }
+        }
+        return try acc.finalize()
+    }
+
     /// 首次 max_tokens 不足导致思考型模型只产出思考内容时，自动翻倍重试一次。
     func complete(system: String, user: String) async throws -> String {
         do {
@@ -128,6 +195,7 @@ final class OpenAIService: LLMServicing {
             OpenAIChatRequest(model: config.model,
                               temperature: 0.3,
                               maxTokens: maxTokens,
+                              stream: false,
                               messages: [.init(role: "system", content: system),
                                          .init(role: "user", content: user)])
         )
@@ -166,8 +234,17 @@ struct AnthropicRequest: Encodable {
     }
     let model: String
     let max_tokens: Int
+    let stream: Bool
     let system: String?
     let messages: [Message]
+
+    init(model: String, maxTokens: Int, stream: Bool, system: String?, messages: [Message]) {
+        self.model = model
+        self.max_tokens = maxTokens
+        self.stream = stream
+        self.system = system
+        self.messages = messages
+    }
 }
 
 struct AnthropicResponse: Decodable {
@@ -198,6 +275,67 @@ final class AnthropicService: LLMServicing {
         return url
     }
 
+    /// 流式补全：SSE 逐块回调；网关不支持流式时自动回落普通 JSON 解析；
+    /// 思考型模型 max_tokens 截断时自动翻倍重试一次。
+    func stream(system: String, user: String, onDelta: @escaping (String) -> Void) async throws -> String {
+        do {
+            return try await streamOnce(maxTokens: 4096, system: system, user: user, onDelta: onDelta)
+        } catch LLMError.reasoningOnly {
+            return try await streamOnce(maxTokens: 8192, system: system, user: user, onDelta: onDelta)
+        }
+    }
+
+    private func streamOnce(maxTokens: Int, system: String, user: String, onDelta: @escaping (String) -> Void) async throws -> String {
+        let url = try messagesURL()
+        var req = URLRequest(url: url)
+        req.httpMethod = "POST"
+        req.timeoutInterval = 600
+        req.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
+        if !config.apiKey.isEmpty {
+            req.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
+        }
+        req.httpBody = try JSONEncoder().encode(
+            AnthropicRequest(model: config.model,
+                             maxTokens: maxTokens,
+                             stream: true,
+                             system: system,
+                             messages: [.init(role: "user", content: user)])
+        )
+
+        let (bytes, response) = try await session.bytes(for: req)
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            var body = ""
+            for try await line in bytes.lines { body += line }
+            throw LLMError.http(http.statusCode, body)
+        }
+
+        var acc = SSEAccumulator()
+        acc.onDelta = onDelta
+        var sawEvent = false
+        var nonSSEBuffer = ""
+        for try await line in bytes.lines {
+            if line.hasPrefix("data:") {
+                sawEvent = true
+                try acc.absorbAnthropicEvent(jsonPayload: String(line.dropFirst(5)))
+            } else if !line.hasPrefix("event:"), !line.trimmingCharacters(in: .whitespaces).isEmpty {
+                nonSSEBuffer += line
+            }
+        }
+        // 网关不支持流式时回落为普通 JSON 解析
+        if !sawEvent {
+            if let data = nonSSEBuffer.data(using: .utf8),
+               let decoded = try? JSONDecoder().decode(AnthropicResponse.self, from: data) {
+                let text = decoded.content.filter { $0.type == nil || $0.type == "text" }
+                    .compactMap { $0.text }.joined()
+                if !text.isEmpty { return text }
+                let reasoning = decoded.content.compactMap { $0.thinking }.joined()
+                if !reasoning.isEmpty { throw LLMError.reasoningOnly(reasoning) }
+            }
+        }
+        return try acc.finalize()
+    }
+
     /// 首次 max_tokens 不足导致思考型模型只产出思考内容时，自动翻倍重试一次。
     func complete(system: String, user: String) async throws -> String {
         do {
@@ -219,7 +357,8 @@ final class AnthropicService: LLMServicing {
         }
         req.httpBody = try JSONEncoder().encode(
             AnthropicRequest(model: config.model,
-                             max_tokens: maxTokens,
+                             maxTokens: maxTokens,
+                             stream: false,
                              system: system,
                              messages: [.init(role: "user", content: user)])
         )
@@ -251,6 +390,94 @@ final class AnthropicService: LLMServicing {
             throw LLMError.invalidResponse(String(data: data, encoding: .utf8) ?? "\(error)")
         }
     }
+}
+
+// MARK: - SSE 流式解析（纯函数，便于单测）
+
+/// 流式会话的累计状态与判定逻辑。
+struct SSEAccumulator {
+    var text = ""
+    var reasoning = ""
+    var stopReason: String?
+    /// 网关不支持 stream 时会整段返回普通 JSON；记录以便回落解析。
+    var sawNonSSEBody = false
+    var onDelta: ((String) -> Void)?
+
+    mutating func absorbOpenAIChunk(jsonData: String) throws {
+        let trimmed = jsonData.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty, trimmed != "[DONE]" else { return }
+        sawNonSSEBody = false
+        guard let data = trimmed.data(using: .utf8),
+              let chunk = try? JSONDecoder().decode(OpenAIStreamChunk.self, from: data),
+              let choice = chunk.choices?.first else {
+            // 网关忽略 stream=true 返回了完整 JSON 响应 → 整体作为正文回落
+            if let obj = try? JSONSerialization.jsonObject(with: Data(trimmed.utf8)) as? [String: Any],
+               obj["choices"] != nil { sawNonSSEBody = true }
+            return
+        }
+        if let d = choice.delta?.content, !d.isEmpty {
+            text += d
+            onDelta?(d)
+        }
+        if let r = choice.delta?.reasoning_content, !r.isEmpty { reasoning += r }
+        if let f = choice.finish_reason { stopReason = f }
+    }
+
+    mutating func absorbAnthropicEvent(jsonPayload: String) throws {
+        let trimmed = jsonPayload.trimmingCharacters(in: .whitespaces)
+        guard !trimmed.isEmpty,
+              let data = trimmed.data(using: .utf8),
+              let event = try? JSONDecoder().decode(AnthropicStreamEvent.self, from: data) else {
+            return
+        }
+        switch event.type {
+        case "content_block_delta":
+            if let t = event.delta?.text, !t.isEmpty {
+                text += t
+                onDelta?(t)
+            }
+            if let th = event.delta?.thinking, !th.isEmpty { reasoning += th }
+        case "message_delta":
+            if let sr = event.delta?.stop_reason { stopReason = sr }
+        default:
+            break
+        }
+    }
+
+    /// 结束时判定正文；思考-only/截断等情况抛出可操作的错误。
+    func finalize() throws -> String {
+        if !text.isEmpty { return text }
+        if !reasoning.isEmpty { throw LLMError.reasoningOnly(reasoning) }
+        if stopReason == "max_tokens" || stopReason == "length" {
+            throw LLMError.reasoningOnly(L10n.s("（响应因 max_tokens 截断）", "(response truncated by max_tokens)"))
+        }
+        throw LLMError.emptyResponse
+    }
+}
+
+/// Anthropic 流事件结构。
+struct AnthropicStreamEvent: Decodable {
+    struct Delta: Decodable {
+        let type: String?
+        let text: String?
+        let thinking: String?
+        let stop_reason: String?
+    }
+    let type: String?
+    let delta: Delta?
+}
+
+/// OpenAI 流块结构。
+struct OpenAIStreamChunk: Decodable {
+    struct Choice: Decodable {
+        struct Delta: Decodable {
+            let content: String?
+            let reasoning_content: String?
+        }
+        let finish_reason: String?
+        let delta: Delta?
+    }
+    let choices: [Choice]?
 }
 
 // MARK: - Prompt 构建
