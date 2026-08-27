@@ -208,6 +208,9 @@ struct MessageBubble: View {
     let onExecute: (AgentActionParser.Action) -> Void
     let onDismiss: (AgentActionParser.Action) -> Void
 
+    @State private var hovered = false
+    @State private var copied = false
+
     /// 气泡最大宽度跟随面板实际宽度（拖拽/自适应后消息与表格同步撑开）。
     private var maxBubbleWidth: CGFloat {
         max(260, availableWidth - 44)
@@ -250,6 +253,27 @@ struct MessageBubble: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: message.sender == .user ? .trailing : .leading)
+        .onHover { hovered = $0 }
+        .overlay(alignment: .topTrailing) {
+            if hovered, message.sender != .systemNotice, !message.content.isEmpty {
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(message.content, forType: .string)
+                    copied = true
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { copied = false }
+                } label: {
+                    Image(systemName: copied ? "checkmark" : "doc.on.doc")
+                        .font(.caption2)
+                        .foregroundColor(copied ? .green : .secondary)
+                        .frame(width: 20, height: 20)
+                        .background(Circle().fill(Color(nsColor: .controlBackgroundColor)))
+                        .overlay(Circle().strokeBorder(Color.primary.opacity(0.1)))
+                }
+                .buttonStyle(.borderless)
+                .offset(x: -4, y: -4)
+                .help(L10n.s("复制这条消息", "Copy this message"))
+            }
+        }
     }
 
     @Environment(\.openURL) private var openURL
