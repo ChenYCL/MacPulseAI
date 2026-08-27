@@ -307,4 +307,25 @@ final class FeatureV2Tests: XCTestCase {
         XCTAssertEqual(MarkdownView.displayWidth("ab"), 2.0)
         XCTAssertEqual(MarkdownView.displayWidth("🟡中"), 4.0, "emoji 记双倍宽")
     }
+
+    // MARK: 分析页（仿 Mole Analyze）du 解析
+
+    func testDuOutputParsing() {
+        let parent = "/Users/demo"
+        let text = "4096\t/Users/demo\n524288\t/Users/demo/Library\n1048576\t/Users/demo/work\n0\t/Users/demo/empty\n"
+        let entries = AnalyzeModel.parseDuOutput(text, parent: parent)
+        XCTAssertEqual(entries.count, 3, "父目录自身行应被剔除")
+        XCTAssertEqual(entries.first { $0.name == "Library" }?.bytes, 524288 * 1024)
+        XCTAssertEqual(entries.first { $0.name == "work" }?.bytes, 1_048_576 * 1024)
+        XCTAssertEqual(entries.first { $0.name == "empty" }?.bytes, 0)
+        XCTAssertTrue(entries.allSatisfy { !$0.path.isEmpty })
+        // 畸形行被忽略
+        XCTAssertEqual(AnalyzeModel.parseDuOutput("not-a-number\tx\n", parent: parent).count, 0)
+    }
+
+    @MainActor
+    func testFolderAISummaryContainsTopEntries() {
+        let m = AnalyzeModel()
+        XCTAssertFalse(m.aiSummary().isEmpty)
+    }
 }

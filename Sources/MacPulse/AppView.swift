@@ -17,21 +17,63 @@ struct AppView: View {
     /// Pin 常驻：开启后 AI 对话面板在所有标签页显示，且重启后保持打开。
     @AppStorage("aiPanelPinned") private var aiPanelPinned = false
     @StateObject private var disk = DiskModel()
-    @State private var activePane: Pane = .processes
+    @State private var activePane: Pane = .status
 
+    /// 仿 Mole 的行星导航：每页只做一件事，并事先声明检查什么/会改动什么。
     enum Pane: String, CaseIterable, Identifiable {
-        case processes, disk, ports, security
+        case status, clean, software, optimize, analyze, security
         var id: String { rawValue }
 
         var title: String {
             switch self {
-            case .processes: return L10n.s("进程", "Processes")
-            case .disk: return L10n.s("磁盘", "Disk")
-            case .ports: return L10n.s("端口", "Ports")
+            case .status: return L10n.s("状态", "Status")
+            case .clean: return L10n.s("清理", "Clean")
+            case .software: return L10n.s("软件", "Software")
+            case .optimize: return L10n.s("优化", "Optimize")
+            case .analyze: return L10n.s("分析", "Analyze")
             case .security: return L10n.s("安全", "Security")
             }
         }
+        var icon: String {
+            switch self {
+            case .status: return "sun.max.fill"          // 太阳
+            case .clean: return "globe.asia.australia.fill" // 地球
+            case .software: return "square.grid.2x2.fill"   // 火星·应用
+            case .optimize: return "speedometer"            // 水星
+            case .analyze: return "chart.pie.fill"          // 木星
+            case .security: return "shield.fill"            // 盾
+            }
+        }
+        var tint: Color {
+            switch self {
+            case .status: return .yellow
+            case .clean: return .green
+            case .software: return .orange
+            case .optimize: return .purple
+            case .analyze: return .blue
+            case .security: return .red
+            }
+        }
+        /// Mole 式安全声明：检查什么，会改动什么。
+        var safetyStatement: String {
+            switch self {
+            case .status: return L10n.s("本页实时读取进程与负载（只读）；终止进程需你逐个确认。",
+                                        "Reads live processes and load (read-only); quitting processes requires your confirmation.")
+            case .clean: return L10n.s("扫描可再生缓存与历史版本包；所选项目移入废纸篓（可恢复）。",
+                                       "Scans regenerable caches and legacy version bundles; selected items move to Trash (restorable).")
+            case .software: return L10n.s("列出应用与启动项；卸载/移除均进废纸篓并需确认。",
+                                          "Lists apps and startup items; uninstall/remove go to Trash after confirmation.")
+            case .optimize: return L10n.s("执行系统维护命令；每张卡片先说明做什么与影响。",
+                                          "Runs system maintenance; each card explains what it does first.")
+            case .analyze: return L10n.s("只读测量文件夹大小；删除仅限移入废纸篓。",
+                                         "Measures folder sizes read-only; deletion is Trash-only.")
+            case .security: return L10n.s("本机体检剪贴板/端口/启动项；AI 分析发送脱敏内容。",
+                                          "On-device clipboard/port/startup audit; AI analysis sends redacted content.")
+            }
+        }
     }
+
+    @StateObject private var analyzeModel = AnalyzeModel()
 
     private var chatVisible: Bool { showAIPanel || aiPanelPinned }
 
@@ -41,15 +83,35 @@ struct AppView: View {
     }
 
     private var panePicker: some View {
-        Picker("", selection: $activePane) {
-            ForEach(Pane.allCases) { p in
-                Label(p.title, systemImage: p == .processes ? "cpu" : "internaldrive").tag(p)
+        VStack(spacing: 0) {
+            Picker("", selection: $activePane) {
+                ForEach(Pane.allCases) { p in
+                    Label(p.title, systemImage: p.icon).tag(p)
+                }
             }
+            .pickerStyle(.segmented)
+            .frame(width: 470)
+            Text(activePane.safetyStatement)
+                .font(.caption2)
+                .foregroundColor(.secondary)
+                .frame(width: 640)
+                .lineLimit(1)
         }
-        .pickerStyle(.segmented)
-        .frame(width: 220)
         .padding(.horizontal, 12)
-        .padding(.vertical, 6)
+        .padding(.vertical, 5)
+    }
+
+    /// 统一的 AI 侧栏包装（所有行星页共用，Pin 常驻）。
+    @ViewBuilder
+    private func chatPanelIfVisible() -> some View {
+        if chatVisible {
+            Divider()
+            ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
+                      onClose: { showAIPanel = false },
+                      panelWidth: panelWidthBinding,
+                      pinned: aiPanelPinned,
+                      onTogglePin: { aiPanelPinned.toggle() })
+        }
     }
 
     private var flaggedPIDs: Set<Int32> {
@@ -64,7 +126,7 @@ struct AppView: View {
 
     private var filteredProcesses: [ProcSample] {
         let q = searchText.trimmingCharacters(in: .whitespaces)
-        let flagFirst = activePane == .processes && showAIPanel
+        let flagFirst = activePane == .status && showAIPanel
         let (top, rest) = sortedByFlagThenOrder
 
         func filter(_ list: [ProcSample]) -> [ProcSample] {
@@ -86,64 +148,54 @@ struct AppView: View {
             Divider()
             panePicker
             Divider()
-            if activePane == .processes {
+            switch activePane {
+            case .status:
                 HStack(spacing: 0) {
                     table
-                    if chatVisible {
-                        Divider()
-                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
-                                  onClose: { showAIPanel = false },
-                                  panelWidth: panelWidthBinding)
-                    }
+                    chatPanelIfVisible()
                 }
                 Divider()
                 actionBar
-            } else if activePane == .disk {
+            case .clean:
                 HStack(spacing: 0) {
-                    DiskView(disk: disk, needsConfirm: disk.pendingNeeds,
-                             onConfirmNeeds: { disk.confirmPendingNeeds() },
-                             onDismissNeeds: { disk.dismissPendingNeeds() })
-                    if chatVisible {
-                        Divider()
-                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
-                                  onClose: { showAIPanel = false },
-                                  panelWidth: panelWidthBinding,
-                                  pinned: aiPanelPinned,
-                                  onTogglePin: { aiPanelPinned.toggle() })
-                    }
+                    CleanView(disk: disk, needsConfirm: disk.pendingNeeds,
+                              onConfirmNeeds: { disk.confirmPendingNeeds() },
+                              onDismissNeeds: { disk.dismissPendingNeeds() })
+                    chatPanelIfVisible()
                 }
-            } else if activePane == .ports {
+            case .software:
                 HStack(spacing: 0) {
-                    PortView(chat: chat, configProvider: { store.settings.llmConfig() },
-                             onOpenChat: { ensureChatConfigured(); showAIPanel = true },
-                             monitor: model)
-                    if chatVisible {
-                        Divider()
-                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
-                                  onClose: { showAIPanel = false },
-                                  panelWidth: panelWidthBinding,
-                                  pinned: aiPanelPinned,
-                                  onTogglePin: { aiPanelPinned.toggle() })
-                    }
+                    SoftwareView()
+                    chatPanelIfVisible()
                 }
-            } else {
+            case .optimize:
                 HStack(spacing: 0) {
-                    SecurityView(chat: chat, onAnalyze: {
+                    OptimizeView(disk: disk)
+                    chatPanelIfVisible()
+                }
+            case .analyze:
+                HStack(spacing: 0) {
+                    AnalyzeView(onExplain: { summary in
                         ensureChatConfigured()
                         showAIPanel = true
-                        chat.startSecurityAudit()
-                    }, onOpenChat: { ensureChatConfigured(); showAIPanel = true })
-                    if chatVisible {
-                        Divider()
-                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
-                                  onClose: { showAIPanel = false },
-                                  panelWidth: panelWidthBinding,
-                                  pinned: aiPanelPinned,
-                                  onTogglePin: { aiPanelPinned.toggle() })
-                    }
+                        chat.startFolderAnalysis(summary: summary)
+                    })
+                    chatPanelIfVisible()
+                }
+            case .security:
+                HStack(spacing: 0) {
+                    SecurityView(chat: chat, monitor: model,
+                                 configProvider: { store.settings.llmConfig() },
+                                 onAnalyze: {
+                                     ensureChatConfigured()
+                                     showAIPanel = true
+                                     chat.startSecurityAudit()
+                                 },
+                                 onOpenChat: { ensureChatConfigured(); showAIPanel = true })
+                    chatPanelIfVisible()
                 }
             }
-            if let msg = model.statusMessage, activePane == .processes {
+            if let msg = model.statusMessage, activePane == .status {
                 Divider()
                 HStack(spacing: 6) {
                     Image(systemName: "info.circle.fill").foregroundColor(.blue)
@@ -414,43 +466,56 @@ struct AppView: View {
 
     private var analyzeButtonTitle: String {
         switch activePane {
-        case .processes: return L10n.s("AI 分析", "AI Analyze")
-        case .disk: return L10n.s("AI 分析磁盘", "Analyze Disk")
-        case .ports: return L10n.s("AI 分析端口", "Analyze Ports")
+        case .status: return L10n.s("AI 分析", "AI Analyze")
+        case .clean: return L10n.s("AI 分析磁盘", "Analyze Disk")
+        case .software: return L10n.s("AI 分析软件", "Review Software")
+        case .optimize: return L10n.s("AI 建议维护", "Suggest Maintenance")
+        case .analyze: return L10n.s("AI 解释占用", "Explain Usage")
         case .security: return L10n.s("AI 查毒", "Security Check")
         }
     }
 
     private var analyzeHelp: String {
         switch activePane {
-        case .processes: return L10n.s("结合最新进程快照给出分析与终止建议（需确认）",
-                                       "Analyze the latest process snapshot (termination needs your confirmation)")
-        case .disk: return L10n.s("结合扫描结果评估可清理项（清理需确认）",
-                                  "Review scanned items (cleanup needs your confirmation)")
-        case .ports: return L10n.s("让 AI 审查监听端口是否可疑",
-                                   "Let the AI review listening ports")
+        case .status: return L10n.s("结合最新进程快照给出分析与终止建议（需确认）",
+                                    "Analyze the latest process snapshot (termination needs your confirmation)")
+        case .clean: return L10n.s("结合扫描结果评估可清理项（清理需确认）",
+                                   "Review scanned items (cleanup needs your confirmation)")
+        case .software: return L10n.s("让 AI 审查已装应用与启动项有无可精简项",
+                                      "Let the AI review installed apps and startup items")
+        case .optimize: return L10n.s("让 AI 基于当前状态建议维护动作",
+                                      "Let the AI suggest maintenance based on current state")
+        case .analyze: return L10n.s("把当前目录的测量摘要发给 AI 解读空间去向",
+                                     "Send the current folder measurement to the AI for interpretation")
         case .security: return L10n.s("把脱敏后的剪贴板内容交给 AI 审查是否疑似恶意",
                                       "Send the redacted clipboard to the AI for a malicious-content review")
         }
     }
 
     private var analyzeDisabled: Bool {
-        chat.isStreaming || (activePane == .processes && model.processes.isEmpty)
+        chat.isStreaming || (activePane == .status && model.processes.isEmpty)
     }
 
     private func runAnalysis() {
         ensureChatConfigured()
         switch activePane {
-        case .processes:
+        case .status:
             showAIPanel = true
             chat.startAnalysis()
-        case .disk:
+        case .clean:
             showAIPanel = true
             chat.startDiskAnalysis(items: disk.items, freeGBText: disk.freeBytesText)
-        case .ports:
+        case .software:
             showAIPanel = true
-            chat.send(draft: L10n.s("分析一下当前监听端口里有哪些可能异常的服务",
-                                    "Review the listening ports and flag anything suspicious"))
+            chat.send(draft: L10n.s("审查一下我机器上已安装的应用和启动项，指出可以精简或有风险的项",
+                                    "Review installed apps and startup items; flag anything removable or risky"))
+        case .optimize:
+            showAIPanel = true
+            chat.send(draft: L10n.s("基于当前系统状态，建议我执行哪些维护动作？",
+                                    "Based on current system state, which maintenance actions do you suggest?"))
+        case .analyze:
+            showAIPanel = true
+            chat.startFolderAnalysis(summary: analyzeModel.aiSummary())
         case .security:
             showAIPanel = true
             ensureChatConfigured()

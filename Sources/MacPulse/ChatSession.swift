@@ -196,6 +196,12 @@ final class ChatSession: ObservableObject {
                      wireContent: prompt)
     }
 
+    /// 分析页的「AI 解释」：携带当前目录测量摘要。
+    func startFolderAnalysis(summary: String) {
+        sendInternal(text: L10n.s("解释一下当前文件夹的空间占用", "Explain disk usage of the current folder"),
+                     wireContent: summary)
+    }
+
     /// 用户自由输入（对话 kill/追问等）。
     func send(draft text: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
