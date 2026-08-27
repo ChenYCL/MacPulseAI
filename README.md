@@ -25,7 +25,15 @@ Live process monitor · AI security audits · Disk cleanup · App uninstaller ·
 MacPulse AI 是一款开源、免费、原生（Swift + SwiftUI，零第三方依赖）的 macOS 系统管理工具：它把「活动监视器 + CleanMyMac + iStat」的能力合而为一，并内置 AI Agent——你可以用自然语言问「哪些进程可以杀」「磁盘为什么满了」，AI 会给出分析、证据和**需要你亲自确认才会执行**的操作建议（HITL，human-in-the-loop）。
 
 <p align="center">
-  <img src="docs/screenshot.png" width="860" alt="MacPulse AI 主界面">
+  <img src="docs/screenshot.png" width="880" alt="MacPulse AI —— 进程列表与右侧 AI 对话面板">
+  <br>
+  <em>左侧实时进程表，右侧可拖拽宽度的 AI 侧边栏：Markdown 渲染、证据式分析，终止/清理动作一律需人工确认</em>
+</p>
+
+<p align="center">
+  <img src="docs/screenshot-processes.png" width="880" alt="MacPulse AI 进程监控">
+  <br>
+  <em>瞬时 CPU 采样（双采样差值）：能读出 <code>com.apple.Virtualization.VirtualMachine</code> 的真实 129.8%（多核累加），而不是生命周期均值</em>
 </p>
 
 ### 功能特性
@@ -94,6 +102,12 @@ swift test   # 58 个单元测试
 ## 🇺🇸 English
 
 **MacPulse AI** is an open-source, native (Swift + SwiftUI, zero third-party deps) macOS utility that merges Activity Monitor + CleanMyMac + iStat into one app with a built-in AI agent. Ask "which processes can I kill?" or "why is my disk full?" in natural language; the agent returns evidence-based analysis and **action proposals that only run after you explicitly confirm them** (human-in-the-loop).
+
+<p align="center">
+  <img src="docs/screenshot.png" width="880" alt="MacPulse AI — process table with the AI side panel">
+  <br>
+  <em>Live process table on the left, drag-resizable AI panel on the right — Markdown output, evidence-based findings, and every kill/clean action gated behind your confirmation</em>
+</p>
 
 ### Feature Highlights
 
