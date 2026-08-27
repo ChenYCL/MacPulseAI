@@ -163,9 +163,11 @@ enum MarkdownParser {
 /// 性能：解析结果按内容缓存——父视图因监控数据刷新而重算 body 时不会重复解析/重排。
 struct MarkdownView: View, Equatable {
     let markdown: String
+    /// 可用正文宽度，用于给表格算真实列宽（表格必须撑满且不溢出）。
+    var contentWidth: CGFloat = 420
 
     static func == (lhs: MarkdownView, rhs: MarkdownView) -> Bool {
-        lhs.markdown == rhs.markdown
+        lhs.markdown == rhs.markdown && lhs.contentWidth == rhs.contentWidth
     }
 
     private static let cacheLock = NSLock()
@@ -235,36 +237,50 @@ struct MarkdownView: View, Equatable {
                     .padding(.leading, 8)
             }
         case .table(let header, let rows):
-            let weights = Self.columnWeights(header: header, rows: rows)
-            VStack(alignment: .leading, spacing: 0) {
-                gridRow(cells: header.map { inline($0) }, weights: weights, isHeader: true)
-                Divider()
-                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
-                    gridRow(cells: row.map { inline($0) }, weights: weights, isHeader: false)
-                    Divider().opacity(0.35)
-                }
-            }
-            .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .underPageBackgroundColor).opacity(0.5)))
+            table(header: header, rows: rows)
         case .divider:
             Divider()
         }
     }
 
-    /// 按各列内容的显示宽度分配列宽比例。
-    /// 等分会把「证据」这类长文本列压成细长条（一个字一行），既难读又拖慢文本排版。
-    /// CJK 与 emoji 按双倍宽度计，权重再夹到 [0.6, 3.0] 防止某一列吃掉整行。
-    static func columnWeights(header: [String], rows: [[String]]) -> [Double] {
-        let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
-        guard columnCount > 0 else { return [] }
-        var widths = [Double](repeating: 0, count: columnCount)
-        for row in [header] + rows {
-            for (i, cell) in row.enumerated() where i < columnCount {
-                widths[i] = max(widths[i], displayWidth(cell))
+    /// 表格：按各列内容显示宽度按比例分配 contentWidth，列宽固定为确定值。
+    /// 不能用 layoutPriority 分配——它只决定谁先挑空间，会把低权重列压到 0，
+    /// 长文本挤成几百行的细条（看起来像加载中的骨架屏）。
+    @ViewBuilder
+    private func table(header: [String], rows: [[String]]) -> some View {
+        let widths = Self.columnWidths(header: header, rows: rows, available: contentWidth - 16)
+        VStack(alignment: .leading, spacing: 0) {
+            gridRow(cells: header.map { inline($0) }, widths: widths, isHeader: true)
+            Divider()
+            ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                gridRow(cells: row.map { inline($0) }, widths: widths, isHeader: false)
+                Divider().opacity(0.35)
             }
         }
-        let average = max(1, widths.reduce(0, +) / Double(columnCount))
-        return widths.map { min(3.0, max(0.6, $0 / average)) }
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color(nsColor: .underPageBackgroundColor).opacity(0.5)))
     }
+
+    /// 各列外框宽度（含 16pt 单元格内边距），按内容显示宽度加权后归一化到可用宽度。
+    /// 已扣除列间分隔线占位，保证总和不溢出、最后一列不会被挤到换行。
+    static func columnWidths(header: [String], rows: [[String]], available: CGFloat) -> [CGFloat] {
+        let columnCount = max(header.count, rows.map(\.count).max() ?? 0)
+        guard columnCount > 0, available > 0 else { return [] }
+        var measured = [Double](repeating: 0, count: columnCount)
+        for row in [header] + rows {
+            for (i, cell) in row.enumerated() where i < columnCount {
+                measured[i] = max(measured[i], displayWidth(cell))
+            }
+        }
+        // 每列保底 4 个 CJK 字宽，避免「风险」这类短表头被压到竖排
+        let minimum: Double = displayWidth("汉") * 4
+        measured = measured.map { max($0, minimum) + cellPadding }
+        let usable = max(0, available - CGFloat(columnCount - 1) * dividerWidth)
+        let total = measured.reduce(0, +)
+        return measured.map { usable * CGFloat($0 / total) }
+    }
+
+    static let cellPadding: Double = 16
+    static let dividerWidth: CGFloat = 1
 
     /// 近似显示宽度：CJK / emoji 记 2，其余记 1。
     static func displayWidth(_ s: String) -> Double {
@@ -278,17 +294,20 @@ struct MarkdownView: View, Equatable {
         }
     }
 
-    private func gridRow(cells: [AttributedString], weights: [Double], isHeader: Bool) -> some View {
+    private func gridRow(cells: [AttributedString], widths: [CGFloat], isHeader: Bool) -> some View {
         HStack(alignment: .top, spacing: 0) {
             ForEach(Array(cells.enumerated()), id: \.offset) { idx, cell in
+                // 内边距在 frame 之外，所以 frame 只取「外框宽 - 内边距」，整列外框才等于 widths[idx]
                 Text(cell)
                     .font(isHeader ? .callout.bold() : .callout)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(width: idx < widths.count
+                           ? max(20, widths[idx] - CGFloat(Self.cellPadding))
+                           : nil,
+                           alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 4)
-                    .layoutPriority(idx < weights.count ? weights[idx] : 1)
                 if idx < cells.count - 1 {
-                    Divider()
+                    Divider().frame(width: Self.dividerWidth)
                 }
             }
         }

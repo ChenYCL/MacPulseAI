@@ -276,21 +276,33 @@ final class FeatureV2Tests: XCTestCase {
 
     // MARK: Markdown 表格列宽
 
-    /// 长文本列应拿到明显更高的布局权重，短列（序号/风险）被压缩。
-    func testTableColumnWeights() {
+    /// 列宽必须是「按内容比例分配的确定值」，且总和填满可用宽度、不溢出。
+    func testTableColumnWidths() {
         let header = ["#", "发现", "证据", "风险"]
         let rows: [[String]] = [
             ["1", "未知 Python 进程全网卡监听 ：47898（pid 61480）",
-             "地址为 *:47898（对所有接口可见）；进程只有 1 线程", "🟡 需取证"],
+             "地址为 *:47898（对所有接口可见）；进程只有 1 线程，路径是全局 Python", "🟡 需取证"],
+            ["2", "node 开发服务器对局域网开放 ：3001", "*:3001 而非仅回环", "🟡"],
         ]
-        let w = MarkdownView.columnWeights(header: header, rows: rows)
-        XCTAssertEqual(w.count, 4)
-        XCTAssertGreaterThan(w[2], w[0], "证据列权重必须高于序号列")
-        XCTAssertGreaterThan(w[2], w[3], "长文本列必须比状态列宽")
-        XCTAssertEqual(w[3], 0.6, accuracy: 0.001, "最短列被夹到下限")
-        XCTAssertLessThan(w[2], 3.001, "单列不能超过上限")
+        let available: CGFloat = 560
+        let w = MarkdownView.columnWidths(header: header, rows: rows, available: available)
 
-        XCTAssertEqual(MarkdownView.columnWeights(header: [], rows: []), [], "空表安全")
+        XCTAssertEqual(w.count, 4)
+        let dividers = CGFloat(header.count - 1) * MarkdownView.dividerWidth
+        XCTAssertEqual(w.reduce(0, +), available - dividers, accuracy: 0.5,
+                       "列宽之和 + 分隔线应正好填满可用宽度，不能溢出")
+        XCTAssertGreaterThan(w[2], w[0], "证据列必须比序号列宽")
+        XCTAssertGreaterThan(w[1], w[3], "长文本列必须比风险列宽")
+        for width in w {
+            XCTAssertGreaterThan(width, MarkdownView.cellPadding + 20,
+                                 "任何一列都要留出内边距外的可读宽度，不能被压成竖排")
+        }
+
+        XCTAssertEqual(MarkdownView.columnWidths(header: [], rows: [], available: 400), [], "空表安全")
+        XCTAssertEqual(MarkdownView.columnWidths(header: header, rows: rows, available: 0), [], "宽度未知时不产出列宽")
+    }
+
+    func testDisplayWidthCountsWideScalarsDouble() {
         XCTAssertEqual(MarkdownView.displayWidth("证据"), 4.0, "CJK 记双倍宽")
         XCTAssertEqual(MarkdownView.displayWidth("ab"), 2.0)
         XCTAssertEqual(MarkdownView.displayWidth("🟡中"), 4.0, "emoji 记双倍宽")

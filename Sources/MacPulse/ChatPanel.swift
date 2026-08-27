@@ -291,7 +291,8 @@ struct MessageBubble: View, Equatable {
                                 .font(.caption).foregroundColor(.secondary)
                         }
                     } else {
-                        MarkdownView(markdown: message.content)
+                        MarkdownView(markdown: message.content,
+                                     contentWidth: maxBubbleWidth - 16)
                     }
                 }
                 ForEach(message.actions) { proposed in
