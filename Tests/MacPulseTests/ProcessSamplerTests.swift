@@ -43,7 +43,8 @@ final class ProcessSamplerTests: XCTestCase {
         XCTAssertNotNil(p)
         XCTAssertEqual(p?.pid, 0)
         XCTAssertEqual(p?.uid, 0)
-        XCTAssertEqual(p?.cpuTimeSeconds ?? 0, 5 * 3600 + 3 * 60 + 49.52, accuracy: 0.01)
+        let expectedSeconds: Double = Double(5 * 3600) + Double(3 * 60) + 49.52
+        XCTAssertEqual(p?.cpuTimeSeconds ?? 0, expectedSeconds, accuracy: 0.01)
         XCTAssertEqual(p?.ucomm, "kernel_task")
     }
 
