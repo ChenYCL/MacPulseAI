@@ -5,18 +5,59 @@ struct ChatPanel: View {
     @ObservedObject var chat: ChatSession
     let configProvider: () -> LLMConfig?
     let onClose: () -> Void
+    /// 面板宽度（AppView 以 @AppStorage 持久化；左缘把手可拖拽调整）。
+    @Binding var panelWidth: CGFloat
+    @State private var dragStartWidth: CGFloat?
+    @State private var handleHovering = false
     @State private var copied = false
 
+    static let defaultWidth: CGFloat = 460
+    static let minWidth: CGFloat = 320
+    static let maxWidth: CGFloat = 860
+
+    static func clampedWidth(_ w: CGFloat) -> CGFloat {
+        min(max(minWidth, w), maxWidth)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            messages
-            Divider()
-            inputBar
+        HStack(spacing: 0) {
+            dragHandle
+            VStack(alignment: .leading, spacing: 0) {
+                header
+                Divider()
+                messages
+                Divider()
+                inputBar
+            }
+            .frame(maxWidth: .infinity)
         }
-        .frame(width: 460)
+        .frame(width: panelWidth)
         .background(Color(nsColor: .textBackgroundColor))
+    }
+
+    /// 左缘拖拽把手：左右拖动调整面板宽度（320–860pt），双击恢复默认。
+    private var dragHandle: some View {
+        Rectangle()
+            .fill(handleHovering ? Color.accentColor.opacity(0.45) : Color.clear)
+            .frame(width: 5)
+            .contentShape(Rectangle())
+            .onHover { hovering in
+                handleHovering = hovering
+            }
+            .gesture(
+                DragGesture(minimumDistance: 1)
+                    .onChanged { value in
+                        if dragStartWidth == nil { dragStartWidth = panelWidth }
+                        panelWidth = Self.clampedWidth((dragStartWidth ?? Self.defaultWidth) - value.translation.width)
+                    }
+                    .onEnded { _ in dragStartWidth = nil }
+            )
+            .onTapGesture(count: 2) {
+                withAnimation(.easeOut(duration: 0.15)) {
+                    panelWidth = Self.defaultWidth
+                }
+            }
+            .help(L10n.s("拖拽调整宽度（320–860pt）；双击恢复默认", "Drag to resize (320–860pt); double-click to reset"))
     }
 
     private var header: some View {

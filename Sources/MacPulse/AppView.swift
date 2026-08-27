@@ -13,6 +13,7 @@ struct AppView: View {
     @State private var pendingForcePIDs: [pid_t]?
     @State private var chatConfigured = false
     @StateObject private var chat = ChatSession()
+    @AppStorage("chatPanelWidth") private var chatPanelWidth: Double = 460
     @StateObject private var disk = DiskModel()
     @State private var activePane: Pane = .processes
 
@@ -28,6 +29,11 @@ struct AppView: View {
             case .security: return L10n.s("安全", "Security")
             }
         }
+    }
+
+    private var panelWidthBinding: Binding<CGFloat> {
+        Binding(get: { CGFloat(chatPanelWidth) },
+                set: { chatPanelWidth = Double($0) })
     }
 
     private var panePicker: some View {
@@ -82,7 +88,8 @@ struct AppView: View {
                     if showAIPanel {
                         Divider()
                         ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
-                                  onClose: { showAIPanel = false })
+                                  onClose: { showAIPanel = false },
+                                  panelWidth: panelWidthBinding)
                     }
                 }
                 Divider()
@@ -95,7 +102,8 @@ struct AppView: View {
                     if showAIPanel {
                         Divider()
                         ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
-                                  onClose: { showAIPanel = false })
+                                  onClose: { showAIPanel = false },
+                                  panelWidth: panelWidthBinding)
                     }
                 }
             } else if activePane == .ports {

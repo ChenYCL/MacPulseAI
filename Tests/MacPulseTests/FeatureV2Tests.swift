@@ -218,3 +218,13 @@ final class FeatureV2Tests: XCTestCase {
         proposed.processName = nil
         XCTAssertEqual(proposed.displayTitle(), "PID 33584")
     }
+
+    // MARK: 面板宽度拖拽
+
+    func testPanelWidthClamp() {
+        XCTAssertEqual(ChatPanel.clampedWidth(460), 460)
+        XCTAssertEqual(ChatPanel.clampedWidth(100), ChatPanel.minWidth, "过窄时夹到最小宽度")
+        XCTAssertEqual(ChatPanel.clampedWidth(5000), ChatPanel.maxWidth, "过宽时夹到最大宽度")
+        XCTAssertEqual(ChatPanel.minWidth, 320)
+        XCTAssertEqual(ChatPanel.maxWidth, 860)
+    }
