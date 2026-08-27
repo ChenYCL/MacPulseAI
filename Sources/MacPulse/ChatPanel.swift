@@ -136,6 +136,7 @@ struct ChatPanel: View {
     }
 
     private var messages: some View {
+        GeometryReader { geo in
         ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 10) {
@@ -146,6 +147,7 @@ struct ChatPanel: View {
                     }
                     ForEach(chat.messages) { m in
                         MessageBubble(message: m,
+                                      availableWidth: geo.size.width,
                                       onExecute: { chat.execute(action: $0, in: m.id) },
                                       onDismiss: { chat.dismiss(action: $0, in: m.id) })
                             .id(m.id)
@@ -163,6 +165,7 @@ struct ChatPanel: View {
             .onChange(of: lastAssistantLength) { _ in
                 proxy.scrollTo(chat.messages.last?.id, anchor: .bottom)
             }
+        }
         }
     }
 
@@ -201,8 +204,14 @@ struct ChatPanel: View {
 
 struct MessageBubble: View {
     let message: ChatSession.ChatMessage
+    let availableWidth: CGFloat
     let onExecute: (AgentActionParser.Action) -> Void
     let onDismiss: (AgentActionParser.Action) -> Void
+
+    /// 气泡最大宽度跟随面板实际宽度（拖拽/自适应后消息与表格同步撑开）。
+    private var maxBubbleWidth: CGFloat {
+        max(260, availableWidth - 44)
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -254,7 +263,7 @@ struct MessageBubble: View {
                                        @ViewBuilder content: () -> Content) -> some View {
         content()
             .padding(8)
-            .frame(maxWidth: 400, alignment: alignment == .trailing ? .trailing : .leading)
+            .frame(maxWidth: maxBubbleWidth, alignment: alignment == .trailing ? .trailing : .leading)
             .background(RoundedRectangle(cornerRadius: 9).fill(color).shadow(color: .black.opacity(0.05), radius: 2, y: 1))
     }
 
