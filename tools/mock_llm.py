@@ -65,6 +65,9 @@ class Handler(BaseHTTPRequestHandler):
             payload = {}
         n = count_processes(payload)
         text = MOCK_MD.replace("{N}", str(max(n, 1)))
+        blob = json.dumps(payload, ensure_ascii=False)
+        if any(k in blob for k in ("clean", "\u6e05\u7406")):
+            text = "\u5efa\u8bae\u7acb\u5373\u6e05\u7406\u5e94\u7528\u7f13\u5b58\uff08review-first\uff0c\u4ec5\u79fb\u5165\u5e9f\u7eb8\u7bd3\uff09\uff1a\n\n<action action=\"clean\" target=\"app_caches\"/>"
 
         if not payload.get("stream"):
             if self.path.endswith("/chat/completions"):

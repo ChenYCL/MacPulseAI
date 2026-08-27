@@ -10,20 +10,34 @@ struct AppView: View {
     @State private var sortOrder: [KeyPathComparator<ProcSample>] = [.init(\.cpuPercent, order: .reverse)]
     @State private var showSettings = false
     @State private var showAIPanel = false
-    @State private var aiState: AIState = .idle
     @State private var pendingForcePIDs: [pid_t]?
+    @State private var chatConfigured = false
+    @StateObject private var chat = ChatSession()
+    @StateObject private var disk = DiskModel()
+    @State private var activePane: Pane = .processes
 
-    enum AIState: Equatable {
-        case idle
-        /// 请求进行中；携带已收到的增量文本（流式实时渲染）。
-        case loading(String)
-        case done(String)
-        case failed(String)
+    enum Pane: String, CaseIterable, Identifiable {
+        case processes, disk
+        var id: String { rawValue }
 
-        var isBusy: Bool {
-            if case .loading = self { return true }
-            return false
+        var title: String {
+            switch self {
+            case .processes: return L10n.s("进程", "Processes")
+            case .disk: return L10n.s("磁盘", "Disk")
+            }
         }
+    }
+
+    private var panePicker: some View {
+        Picker("", selection: $activePane) {
+            ForEach(Pane.allCases) { p in
+                Label(p.title, systemImage: p == .processes ? "cpu" : "internaldrive").tag(p)
+            }
+        }
+        .pickerStyle(.segmented)
+        .frame(width: 220)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
     }
 
     private var filteredProcesses: [ProcSample] {
@@ -45,16 +59,23 @@ struct AppView: View {
         VStack(spacing: 0) {
             header
             Divider()
-            HStack(spacing: 0) {
-                table
-                if showAIPanel {
-                    Divider()
-                    AIPanel(state: aiState, onClose: { showAIPanel = false })
-                }
-            }
+            panePicker
             Divider()
-            actionBar
-            if let msg = model.statusMessage {
+            if activePane == .processes {
+                HStack(spacing: 0) {
+                    table
+                    if showAIPanel {
+                        Divider()
+                        ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
+                                  onClose: { showAIPanel = false })
+                    }
+                }
+                Divider()
+                actionBar
+            } else {
+                DiskView(disk: disk)
+            }
+            if let msg = model.statusMessage, activePane == .processes {
                 Divider()
                 Text(msg)
                     .font(.caption)
@@ -76,6 +97,12 @@ struct AppView: View {
         .onAppear {
             model.apply(settings: store.settings)
             L10n.overrideCode = store.settings.uiLanguage
+            selection.removeAll()
+            if !chatConfigured {
+                chat.configure(monitor: model, store: store)
+                chat.setDiskModel(disk)
+                chatConfigured = true
+            }
         }
     }
 
@@ -94,7 +121,7 @@ struct AppView: View {
             }
             .buttonStyle(.borderedProminent)
             .tint(.purple)
-            .disabled(model.processes.isEmpty || aiState.isBusy)
+            .disabled(model.processes.isEmpty || chat.isStreaming)
             Picker(L10n.s("刷新", "Refresh"), selection: $model.refreshInterval) {
                 ForEach([1.0, 2.0, 5.0], id: \.self) { v in
                     Text(L10n.s(String(format: "%.0f 秒", v), String(format: "%.0fs", v))).tag(v)
@@ -272,7 +299,7 @@ struct AppView: View {
             } label: {
                 Label(L10n.s("AI 解释", "Explain"), systemImage: "questionmark.bubble")
             }
-            .disabled(selection.isEmpty || aiState.isBusy)
+            .disabled(selection.isEmpty || chat.isStreaming)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
@@ -317,157 +344,24 @@ struct AppView: View {
     }
 
     private func runAnalysis() {
-        let prompt = PromptBuilder.analysisPrompt(
-            load: model.load,
-            procs: Array(model.processes.prefix(store.settings.topProcessesToSend)),
-            includePath: store.settings.includeProcessPath,
-            cores: model.coreCount
-        )
-        performAI(prompt)
+        ensureChatConfigured()
+        showAIPanel = true
+        chat.startAnalysis()
     }
 
     private func explainSelected() {
-        guard let pid = selection.first,
-              let p = model.processes.first(where: { $0.pid == pid }) else { return }
-        let prompt = PromptBuilder.explainPrompt(
-            proc: p,
-            load: model.load,
-            includePath: store.settings.includeProcessPath,
-            cores: model.coreCount
-        )
-        performAI(prompt)
-    }
-
-    private func performAI(_ prompt: (system: String, user: String)) {
-        aiState = .loading("")
+        guard let pid = selection.first else { return }
+        ensureChatConfigured()
         showAIPanel = true
-        let config = store.settings.llmConfig()
-        Task {
-            do {
-                let service = LLMServiceFactory.service(for: config)
-                let finalText = try await service.stream(system: prompt.system, user: prompt.user) { delta in
-                    Task { @MainActor in
-                        guard case .loading(let acc) = aiState else { return }
-                        aiState = .loading(acc + delta)
-                    }
-                }
-                aiState = .done(Self.normalizedModelOutput(finalText))
-            } catch {
-                aiState = .failed(error.localizedDescription)
-            }
+        chat.startExplain(pid: pid)
+    }
+
+    private func ensureChatConfigured() {
+        if !chatConfigured {
+            chat.configure(monitor: model, store: store)
+            chat.setDiskModel(disk)
+            chatConfigured = true
         }
-    }
-
-    /// 规范化模型输出：剥掉整体包裹的 ```/```markdown 围栏，避免渲染出字面围栏。
-    static func normalizedModelOutput(_ raw: String) -> String {
-        var text = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard text.hasPrefix("```") else { return text }
-        var lines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        guard lines.count > 2,
-              lines.first?.range(of: "^```\\s*(markdown|md)?\\s*$", options: .regularExpression) != nil,
-              lines.last?.trimmingCharacters(in: .whitespaces) == "```"
-        else { return text }
-        lines.removeFirst()
-        lines.removeLast()
-        return lines.joined(separator: "\n")
-    }
-}
-
-// MARK: - AI 结果面板
-
-struct AIPanel: View {
-    let state: AppView.AIState
-    let onClose: () -> Void
-    @State private var copied = false
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkles").foregroundColor(.purple)
-                Text(L10n.s("AI 分析", "AI Analysis")).font(.headline)
-                if copied {
-                    Text(L10n.s("已复制", "Copied")).font(.caption).foregroundColor(.secondary)
-                }
-                Spacer()
-                if case .done(let text) = state {
-                    Button {
-                        NSPasteboard.general.clearContents()
-                        NSPasteboard.general.setString(text, forType: .string)
-                        copied = true
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 2) { copied = false }
-                    } label: {
-                        Image(systemName: "doc.on.doc")
-                    }
-                    .buttonStyle(.borderless)
-                    .help(L10n.s("复制全文", "Copy full text"))
-                }
-                Button {
-                    onClose()
-                } label: {
-                    Image(systemName: "xmark.circle.fill").foregroundColor(.secondary)
-                }
-                .buttonStyle(.borderless)
-                .help(L10n.s("关闭面板", "Close panel"))
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            Divider()
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(12)
-        }
-        .frame(width: 420)
-        .background(Color(nsColor: .textBackgroundColor))
-    }
-
-    @ViewBuilder
-    private var content: some View {
-        switch state {
-        case .idle:
-            Text(L10n.s("点击「AI 分析」分析当前整体占用；或在表格选中进程后点「AI 解释」。\n\nAI 仅提供建议，不会自动执行任何操作。",
-                        "Click “AI Analyze” for an overall analysis, or select a row and click “Explain”.\n\nAI only provides suggestions; it never performs any action."))
-                .foregroundColor(.secondary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-        case .loading(let partial):
-            VStack(spacing: 10) {
-                if partial.isEmpty {
-                    VStack(spacing: 12) {
-                        ProgressView()
-                        Text(L10n.s("正在请求模型…", "Requesting model…"))
-                            .font(.callout).foregroundColor(.secondary)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                } else {
-                    HStack(spacing: 8) {
-                        ProgressView().controlSize(.small)
-                        Text(L10n.s("正在生成…", "Generating…"))
-                            .font(.caption).foregroundColor(.secondary)
-                        Spacer()
-                    }
-                    ScrollView {
-                        Text(renderMarkdown(partial))
-                            .textSelection(.enabled)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-            }
-        case .failed(let message):
-            VStack(alignment: .leading, spacing: 8) {
-                Label(L10n.s("请求失败", "Request failed"), systemImage: "exclamationmark.triangle.fill").foregroundColor(.red)
-                Text(message).font(.callout).textSelection(.enabled)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-        case .done(let text):
-            ScrollView {
-                Text(renderMarkdown(text))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
-
-    private func renderMarkdown(_ s: String) -> AttributedString {
-        (try? AttributedString(markdown: s, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(s)
     }
 }
 
