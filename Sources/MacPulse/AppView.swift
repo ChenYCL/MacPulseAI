@@ -182,122 +182,18 @@ struct AppView: View {
     // MARK: 顶部工具栏
 
     private var header: some View {
-        HStack(spacing: 12) {
-            // 品牌
-            HStack(spacing: 7) {
-                Image(systemName: "bolt.heart.fill")
-                    .font(.system(size: 15))
-                    .foregroundColor(.white)
-                    .frame(width: 26, height: 26)
-                    .background(
-                        RoundedRectangle(cornerRadius: 7)
-                            .fill(LinearGradient(colors: [.pink, .purple],
-                                                 startPoint: .topLeading, endPoint: .bottomTrailing))
-                    )
-                VStack(alignment: .leading, spacing: 0) {
-                    Text("MacPulse AI").font(.headline)
-                    Text(L10n.s("AI 进程管家", "AI Process Manager"))
-                        .font(.system(size: 9)).foregroundColor(.secondary)
-                }
-            }
-
-            // 统计卡
-            HStack(spacing: 6) {
-                statCard(L10n.s("用户", "USER"),
-                         value: String(format: "%.1f%%", model.load.userPercent),
-                         icon: "person.fill", tint: .blue)
-                statCard(L10n.s("系统", "SYS"),
-                         value: String(format: "%.1f%%", model.load.systemPercent),
-                         icon: "gearshape.fill", tint: .orange)
-                statCard(L10n.s("空闲", "IDLE"),
-                         value: String(format: "%.1f%%", model.load.idlePercent),
-                         icon: "zzz", tint: .green)
-                statCard(L10n.s("内存", "MEM"),
-                         value: model.memoryUsedPercent.map { String(format: "%.1f%%", $0) } ?? "--",
-                         icon: "memorychip", tint: .indigo,
-                         warn: (model.memoryUsedPercent ?? 0) >= 85)
-                if let swap = model.swapUsedText {
-                    statCard(L10n.s("交换", "SWAP"), value: swap,
-                             icon: "arrow.triangle.swap", tint: .red, warn: true)
-                        .help(L10n.s("Swap 使用越多说明物理内存压力越大",
-                                     "More swap usage means heavier memory pressure"))
-                }
-            }
-
-            Spacer(minLength: 8)
-
-            Button {
-                runAnalysis()
-            } label: {
-                Label(analyzeButtonTitle, systemImage: "sparkles")
-                    .padding(.horizontal, 4)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.purple)
-            .shadow(color: .purple.opacity(0.30), radius: 5, y: 2)
-            .disabled(analyzeDisabled)
-            .help(analyzeHelp)
-
-            Picker(L10n.s("刷新", "Refresh"), selection: $model.refreshInterval) {
-                ForEach([1.0, 2.0, 5.0], id: \.self) { v in
-                    Text(L10n.s(String(format: "%.0f 秒", v), String(format: "%.0fs", v))).tag(v)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 172)
-            .help(L10n.s("自动刷新间隔", "Auto refresh interval"))
-
-            HStack(spacing: 4) {
-                iconHeaderButton(model.isPaused ? "play.fill" : "pause.fill",
-                                 help: model.isPaused ? L10n.s("继续刷新", "Resume") : L10n.s("暂停刷新", "Pause")) {
-                    model.isPaused.toggle()
-                }
-                iconHeaderButton("gearshape", help: L10n.s("设置", "Settings")) {
-                    showSettings = true
-                }
-            }
-        }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 9)
-        .background(.bar)
+        HeaderView(load: model.load,
+                   memPercent: model.memoryUsedPercent,
+                   swapText: model.swapUsedText,
+                   isPaused: model.isPaused,
+                   analyzeTitle: analyzeButtonTitle,
+                   analyzeHelp: analyzeHelp,
+                   analyzeDisabled: analyzeDisabled,
+                   refreshInterval: $model.refreshInterval,
+                   onAnalyze: { runAnalysis() },
+                   onPause: { model.isPaused.toggle() },
+                   onSettings: { showSettings = true })
     }
-
-    private func iconHeaderButton(_ systemImage: String, help: String,
-                                  action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
-                .frame(width: 30, height: 26)
-        }
-        .buttonStyle(.bordered)
-        .help(help)
-    }
-
-    /// 统计卡：彩色圆底图标 + 标签 + 等宽数值。
-    private func statCard(_ title: String, value: String, icon: String,
-                          tint: Color, warn: Bool = false) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: icon)
-                .font(.system(size: 10, weight: .semibold))
-                .foregroundColor(.white)
-                .frame(width: 18, height: 18)
-                .background(Circle().fill(tint.opacity(warn ? 0.9 : 0.75)))
-            VStack(alignment: .leading, spacing: 0) {
-                Text(title).font(.system(size: 9, weight: .medium))
-                    .foregroundColor(.secondary)
-                    .tracking(0.5)
-                Text(value)
-                    .font(.system(size: 12, weight: .semibold).monospacedDigit())
-                    .foregroundColor(warn ? tint : .primary)
-                    .lineLimit(1)
-            }
-        }
-        .padding(.horizontal, 9)
-        .padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color(nsColor: .controlBackgroundColor)))
-        .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(Color.primary.opacity(0.06)))
-    }
-
     // MARK: 进程表
 
     private var table: some View {

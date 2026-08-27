@@ -166,6 +166,7 @@ struct ChatPanel: View {
                                       availableWidth: geo.size.width,
                                       onExecute: { chat.execute(action: $0, in: m.id) },
                                       onDismiss: { chat.dismiss(action: $0, in: m.id) })
+                            .equatable()
                             .id(m.id)
                     }
                     if let err = chat.lastError {
@@ -218,11 +219,21 @@ struct ChatPanel: View {
 
 // MARK: - 单条消息气泡
 
-struct MessageBubble: View {
+struct MessageBubble: View, Equatable {
     let message: ChatSession.ChatMessage
     let availableWidth: CGFloat
     let onExecute: (AgentActionParser.Action) -> Void
     let onDismiss: (AgentActionParser.Action) -> Void
+
+    /// 性能：进程监控每 2 秒刷新会触发父视图 body 重算；
+    /// 只有消息内容/动作状态/宽度真正变化时才重绘气泡（长 Markdown 报告尤其昂贵）。
+    static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
+        lhs.message.id == rhs.message.id
+            && lhs.message.content == rhs.message.content
+            && lhs.availableWidth == rhs.availableWidth
+            && lhs.message.actions.map(\.state) == rhs.message.actions.map(\.state)
+            && lhs.message.actions.map(\.resultText) == rhs.message.actions.map(\.resultText)
+    }
 
     @State private var hovered = false
     @State private var copied = false

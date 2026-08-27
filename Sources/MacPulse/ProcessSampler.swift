@@ -80,6 +80,9 @@ final class ProcessSampler {
     private var lastWall: Date?
     /// 路径缓存：进程可执行路径基本不变，避免每轮对全部 pid 调 proc_pidpath（降低自身 CPU）。
     private var pathCache: [Int32: String] = [:]
+    /// 线程数缓存：变化缓慢，每 N 轮全量刷新一次即可（减少 syscall 与 UI 抖动）。
+    private var threadsCache: [Int32: Int] = [:]
+    private var tickCounter = 0
 
     init(readOutput: @escaping () throws -> String = { try ProcessSampler.runPS() },
          now: @escaping () -> Date = Date.init,
@@ -153,6 +156,8 @@ final class ProcessSampler {
         let lines = PSParser.parseOutput(output)
         let timestamp = now()
         let wall = lastWall.map { timestamp.timeIntervalSince($0) } ?? 0
+        tickCounter += 1
+        let refreshThreads = tickCounter % 3 == 1
 
         // 批量获取路径：优先缓存，只对新增 pid 调 proc_pidpath；已消失的 pid 从缓存剔除
         let psPIDs = Set(lines.map { $0.pid })
@@ -186,14 +191,20 @@ final class ProcessSampler {
             let baseName = path.isEmpty ? "" : (path as NSString).lastPathComponent
             let name = baseName.isEmpty ? (line.ucomm.isEmpty ? "(\(line.pid))" : line.ucomm) : baseName
             let mine = line.uid == getuid()
-            let threads = mine ? (threadsProvider(line.pid) ?? 0) : 0
+            var threads = threadsCache[line.pid] ?? 0
+            if mine, refreshThreads || threadsCache[line.pid] == nil {
+                threads = threadsProvider(line.pid) ?? 0
+                threadsCache[line.pid] = threads
+            }
+            // 微小抖动归零：避免每轮 0.0x% 的无意义 UI diff
+            let cpuFinal = cpu < 0.05 ? 0 : cpu
             result.append(ProcSample(pid: line.pid,
                                      name: name,
                                      path: path,
                                      user: line.user,
                                      uid: line.uid,
                                      isOwnedByMe: mine,
-                                     cpuPercent: max(0, cpu),
+                                     cpuPercent: max(0, cpuFinal),
                                      memPercent: line.pmem,
                                      rssBytes: line.rssKB * 1024,
                                      threads: threads,
@@ -201,6 +212,7 @@ final class ProcessSampler {
         }
         lastCPUTime = newLast
         lastWall = timestamp
+        threadsCache = threadsCache.filter { psPIDs.contains($0.key) }
         return result
     }
 }

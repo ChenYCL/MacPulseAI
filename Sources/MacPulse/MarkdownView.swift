@@ -160,11 +160,30 @@ enum MarkdownParser {
 }
 
 /// 渲染 GFM 子集的 Markdown 视图。
-struct MarkdownView: View {
+/// 性能：解析结果按内容缓存——父视图因监控数据刷新而重算 body 时不会重复解析/重排。
+struct MarkdownView: View, Equatable {
     let markdown: String
+
+    static func == (lhs: MarkdownView, rhs: MarkdownView) -> Bool {
+        lhs.markdown == rhs.markdown
+    }
+
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: [MDBlock]] = [:]
+
+    private var blocks: [MDBlock] {
+        Self.cacheLock.lock()
+        defer { Self.cacheLock.unlock() }
+        if let hit = Self.cache[markdown] { return hit }
+        let parsed = MarkdownParser.parse(markdown)
+        if Self.cache.count > 60 { Self.cache.removeAll() }
+        Self.cache[markdown] = parsed
+        return parsed
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            ForEach(Array(MarkdownParser.parse(markdown).enumerated()), id: \.offset) { _, block in
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, block in
                 blockView(block)
             }
         }

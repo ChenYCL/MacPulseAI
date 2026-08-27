@@ -1,72 +1,117 @@
+<div align="center">
+
 # ⚡️ MacPulse AI
 
-**AI-powered macOS process manager & CPU monitor** — see what's eating your CPU, understand *why* with LLM analysis (OpenAI & Anthropic), and kill runaway processes safely.
+**AI 驱动的 macOS 进程管家 · AI-powered macOS process manager**
 
-**AI 进程管家**：实时监控 macOS 进程瞬时 CPU，用 LLM（OpenAI / Anthropic）解释"这些进程是什么、能不能杀"，并安全终止失控进程。
+实时进程监控 · AI 安全体检 · 磁盘清理 · 应用卸载 · 受控终端 Agent
+Live process monitor · AI security audits · Disk cleanup · App uninstaller · Controlled terminal agent
+
+[![Release](https://img.shields.io/github/v/release/ChenYCL/MacPulseAI)](https://github.com/ChenYCL/MacPulseAI/releases)
+[![Tests](https://img.shields.io/badge/tests-58%20green-brightgreen)](#-testing)
+[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)](https://github.com/ChenYCL/MacPulseAI/releases)
+
+**[下载 Download](https://github.com/ChenYCL/MacPulseAI/releases/latest)** · [English](#-english) · [功能特性](#-功能特性) · [架构](docs/PRD.md)
+
+</div>
+
+---
+
+## 🇨🇳 中文介绍
+
+### 这是什么？
+
+MacPulse AI 是一款开源、免费、原生（Swift + SwiftUI，零第三方依赖）的 macOS 系统管理工具：它把「活动监视器 + CleanMyMac + iStat」的能力合而为一，并内置 AI Agent——你可以用自然语言问「哪些进程可以杀」「磁盘为什么满了」，AI 会给出分析、证据和**需要你亲自确认才会执行**的操作建议（HITL，human-in-the-loop）。
 
 <p align="center">
-  <img src="docs/screenshot.png" width="720" alt="MacPulse AI">
+  <img src="docs/screenshot.png" width="860" alt="MacPulse AI 主界面">
 </p>
 
-## ✨ Features
+### 功能特性
 
-- **Real-time monitoring** — per-process *instantaneous* CPU (double-sampling, not lifetime averages), memory, threads, user, full executable path; system CPU overview; menu-bar CPU% item.
-- **Process management** — Quit (SIGTERM) / Force Quit (SIGKILL with confirmation showing name & PID), copy info; processes owned by other users are protected with clear hints; high-CPU rows highlighted (threshold configurable).
-- **AI assistant** — send the top-N process snapshot to an LLM and get a structured Markdown report (Overall Assessment / Process Breakdown / Recommendations with 🔴🟡🟢 risk levels); per-process "Explain" too. AI only advises — it never kills anything.
-- **Two LLM protocols** — OpenAI-compatible (any gateway/local server with `/v1/chat/completions`) and Anthropic (auto-appends `/v1/messages`, works with z.ai etc.); one-click "Test Connection"; config stored at `~/Library/Application Support/MacPulse/config.json` (chmod 600).
-- **Bilingual UI** 🇨🇳/🇺🇸 — follows system language, overridable in Settings (自动 / 中文 / English). LLM prompts are localized too.
-- **Native & light** — Swift + SwiftUI, zero third-party dependencies; ~0.2% CPU when the window is closed/occluded.
+**📊 进程监控（Processes）**
+- 真实**瞬时 CPU**（双采样差值，非生命周期均值——活动监视器都做不到的精度）
+- CPU 迷你条形图、阈值标红；内存/线程/用户/完整路径；内存压力 + Swap 警示卡
+- 搜索、多选、退出（SIGTERM）/强制退出（SIGKILL，带确认弹窗）；其他用户的进程自动保护
 
-## 🚀 Build & Run
+**🛡 安全中心（Security）**
+- **AI 查毒（全系统体检）**：AI 汇总进程 + 全部 TCP 监听端口 + 磁盘 + 剪贴板 + 启动项做综合安全审计，输出可疑行为排序表（证据/风险 🟢🟡🔴）、逐项解读与处置建议
+- **剪贴板体检**：本机识别 API 密钥 / PEM 私钥 / 钱包地址 / 高危 shell 命令（`rm -rf`、`curl|sh`…），脱敏展示 + 一键清空；「AI 查毒」按需把**脱敏后**内容送模型复审
+- **启动项审计**：用户级 LaunchAgents 可安全移除（进废纸篓），全局项只读标注
+- **安全钩子 SafetyGuard**：所有破坏性操作（删除/清理/维护/终止/shell）执行前强制裁决——路径黑名单拦截、运行中占用保护、规模异常需人工确认；每次裁决带「会发生什么/影响/如何恢复」说明卡并写入审计日志；**代码中不存在任何静默物理删除通道，删除一律进废纸篓**
 
-Requires Xcode / Swift 6 toolchain, macOS 13+.
+**💾 磁盘管家（Disk）**
+- 四类可再生垃圾：应用缓存 / 日志 / 开发缓存（Xcode·npm·gradle·playwright·CocoaPods）/ **CLI 历史版本包**（claude·cursor-agent·opencode，语义版本比较保留最新、运行中版本自动排除）
+- Review-first：先看清单再勾选，全部移入废纸篓可恢复
+- **应用卸载器**：13 类残留审查（Preferences/AppSupport/Containers/WebKit/HTTPStorages…）
+- 维护动作：释放内存（purge）/ 刷新 DNS / **重建 Launch Services** / 清空废纸篓
+
+**🔌 端口（Ports）**
+- 谁在监听哪个端口一目了然；过滤、AI 解释该进程、HITL 终止——「谁占了 3000 端口」三秒定位
+
+**🤖 AI 对话 Agent（全部页面 Pin 常驻）**
+- 多轮对话 + 流式输出（SSE，OpenAI 兼容 & Anthropic 双协议）；Markdown 完整渲染（表格/代码块/列表）
+- **受控终端 Agent**：模型可提议 shell 命令——只读命令（ls/du/cat/lsof…）自动执行并把输出回灌给模型续答；写操作需你确认；危险命令（rm/sudo/管道执行）硬拦截并给替代方案
+- **HITL 动作卡**：AI 建议的每个终止/清理操作都是独立确认卡（进程名/PID/SIGTERM-SIGKILL 语义），确认前绝不执行；被建议的进程在左侧表格**标红置顶**
+- `<tool name="snapshot"/>` 数据新鲜度工具环；对话历史跨重启持久化；面板可拖拽调宽（320–860pt，双击复位）
+
+**🌍 双语**：界面与 AI 输出均支持 中文 / English，跟随系统并可手动切换。
+
+### 安装
 
 ```bash
-./scripts/build_app.sh     # swift build -c release → build/MacPulse.app (ad-hoc signed, icon bundled)
-open build/MacPulse.app
+# 下载 DMG（或 brew 待收录）
+# https://github.com/ChenYCL/MacPulseAI/releases/latest
 ```
 
-Development:
+1. 打开 DMG，把 **MacPulse AI** 拖入 Applications
+2. 首次打开：右键 → 「打开」（绕过 Gatekeeper 未公证提示）
+3. 设置 → 填入 OpenAI 兼容或 Anthropic 的 Base URL / API Key / 模型名（z.ai、DeepSeek、本地 Ollama 等任何兼容网关均可），点「测试连接」
+
+<details>
+<summary>从源码构建 Build from source</summary>
 
 ```bash
-swift build    # debug build
-swift test     # 22 unit tests
+git clone https://github.com/ChenYCL/MacPulseAI && cd MacPulseAI
+./scripts/build_app.sh && open build/MacPulse.app
+swift test   # 58 个单元测试
 ```
+要求：macOS 13+ / Xcode 15+（Swift 6 工具链亦可编译，语言模式 v5）。
 
-## 🧪 Testing
+</details>
 
-- **Unit tests** (`swift test`): ps line parsing (spaced ucomm / kernel processes / garbage rows), multi-format CPU TIME parsing, instantaneous CPU math (multi-core clamp, PID-reuse reset, first-sample fallback), AI prompt payloads (field completeness / path redaction / zh & en), both providers' request & response & error handling, settings persistence with 0600 permission check, language resolution.
-- **Integration without a real API key**: `python3 tools/mock_llm.py 18787` serves both `/chat/completions` and `/v1/messages` (logs request bodies to `/tmp/macpulse_mock_llm.log`) to verify the full HTTP path and rendering.
-- **End-to-end** (verified on this repo): spawn a `yes` CPU burner → it appears at ≈100% in the app → select → confirmation dialog → SIGKILL → gone from `pgrep`.
+### 🧪 Testing
 
-## 🔬 How sampling works
+58 个单元测试覆盖：瞬时 CPU 数学（多核夹取/PID 复用回退）、ps/libproc 解析、两种 LLM 协议的流式 SSE 与错误事件（对照官方规范）、HITL 动作解析、SafetyGuard 拦截矩阵、剪贴板模式与脱敏、卸载器残留匹配、版本过滤、启动项扫描、Markdown 解析、设置持久化（0600）。另有 `tools/mock_llm.py` 本地双协议 mock 供无 Key 集成测试。
 
-On macOS, `ps -o comm` truncates to 16 chars, `ucomm` may contain spaces, and there is no thread-count keyword — so text parsing alone is unreliable. MacPulse AI uses a hybrid:
+### 性能
 
-1. `ps -axo pid=,user=,uid=,state=,time=,pcpu=,pmem=,rss=,ucomm=` (fixed single-token fields) — covers CPU time of root processes too;
-2. `proc_pidpath` (libproc) — full executable paths (cached; works for most other-user processes);
-3. `proc_pidinfo(PROC_PIDTASKINFO)` — thread counts (readable for your own processes only; others show "—");
-4. **Instantaneous CPU% = Δ accumulated CPU time ÷ Δ wall clock** (first sample falls back to ps `pcpu`; PID reuse resets to 0; clamped to cores × 100).
+自建 app 自身开销：窗口可见态 **~1–2% CPU**（采样 ps+libproc 混合管线，路径/线程数缓存，Markdown 解析缓存与 Equatable 视图跳过无意义重绘），后台遮挡态 ~0.2%。
 
-## 📁 Project layout
+---
 
-```
-Sources/MacPulse/     main.swift / AppView.swift / MonitorModel.swift / L10n.swift /
-                      ProcessSampler.swift / SystemLoad.swift / LLMClient.swift /
-                      SettingsStore.swift / ProcessKiller.swift / Models.swift
-Tests/MacPulseTests/  ProcessSamplerTests / LLMClientTests / SettingsStoreTests
-scripts/              build_app.sh (bundle + sign + icon) / make_icon.swift (icon generator)
-tools/mock_llm.py     local dual-protocol mock LLM server
-docs/PRD.md           product requirements & acceptance results (中文)
-```
+## 🇺🇸 English
 
-## 📝 Notes & limitations
+**MacPulse AI** is an open-source, native (Swift + SwiftUI, zero third-party deps) macOS utility that merges Activity Monitor + CleanMyMac + iStat into one app with a built-in AI agent. Ask "which processes can I kill?" or "why is my disk full?" in natural language; the agent returns evidence-based analysis and **action proposals that only run after you explicitly confirm them** (human-in-the-loop).
 
-- Other users' (root) processes cannot be terminated (elevation is out of scope for v1); their thread counts/paths may be unavailable due to system hardening — shown as "—".
-- API keys are stored in plain text in the local config file (0600); Keychain migration planned.
-- AI requests are non-streaming (30s timeout). The app costs ~4-5% CPU while the window is visible at 2s refresh (SwiftUI table rendering), ~0.2% when hidden.
-- AI output is advisory only; terminating processes is always your call.
+### Feature Highlights
 
-## 📄 License
+- **📊 Processes** — true *instantaneous* CPU via double sampling (not lifetime averages), mini CPU bars, memory pressure + swap warning cards, full executable paths, search & multi-select, SIGTERM/SIGKILL with confirmation; root processes protected.
+- **🛡 Security** — *AI poison check*: a full-system audit across processes, ALL TCP listening ports, disk, clipboard and login items, producing a ranked suspicious-behavior table (evidence / 🟢🟡🔴 risk), per-finding explanations and remediation. Local clipboard scanning (API keys, PEM keys, wallet addresses, dangerous shell commands like `rm -rf`) with redacted previews and one-click clear. Login-items auditing with safe user-level removal. **SafetyGuard** gates every destructive op: path blacklists, in-use protection, oversized-batch confirmation, what/impact/recovery explanation cards and a full audit journal — no silent permanent-delete path exists in the codebase; deletions always go to the Trash.
+- **💾 Disk** — four regenerable junk categories (app caches / logs / dev caches incl. Xcode·npm·gradle·playwright / **legacy CLI version bundles** like claude·cursor-agent·opencode with semantic-version newest-keep and running-build exclusion), review-first, everything to Trash; **app uninstaller** with 13 leftover-location review; maintenance actions (purge memory, flush DNS, **rebuild Launch Services**, empty Trash).
+- **🔌 Ports** — see who listens where, filter, AI-explain the process, HITL terminate. "Who's on port 3000" answered in seconds.
+- **🤖 AI agent (pinned on every tab)** — multi-turn streaming chat (SSE; OpenAI-compatible & Anthropic), full Markdown rendering (tables/code blocks), **controlled terminal agent**: read-only commands auto-execute with output fed back to the model; writes need confirmation; dangerous commands hard-blocked with alternatives. Every proposed kill/clean is a HITL card (process name/PID/signal semantics); suggested PIDs turn red and pin to the top of the process table. `<tool name="snapshot"/>` freshness loop; chat history persists across relaunch; drag-resizable panel (320–860pt, double-click reset).
+- **🌍 Bilingual** — UI and AI output in 中文 / English, follows the system with manual override.
 
-MIT © 2026 ChenYCL
+### Install
+
+Grab the DMG from [Releases](https://github.com/ChenYCL/MacPulseAI/releases/latest), drag **MacPulse AI** to Applications, right-click → Open on first launch (unsigned ad-hoc build), then paste your OpenAI-compatible or Anthropic endpoint + key in Settings and hit *Test Connection*. Works with z.ai, DeepSeek, local Ollama — any compatible gateway.
+
+### Performance
+
+Self-overhead: **~1–2% CPU** while visible (hybrid ps+libproc sampling with path/thread caches, cached Markdown parsing, Equatable views skipping no-op redraws), ~0.2% when occluded.
+
+### License
+
+MIT © 2026 ChenYCL — [PRD & design docs](docs/PRD.md) · [Task PRD](docs/tasks-prd.md)
