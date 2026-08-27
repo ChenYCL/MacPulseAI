@@ -25,7 +25,7 @@ jobs:
           xcodebuild -version
 
       - name: Run tests
-        run: swift test 2>&1 | tail -5
+        run: set -o pipefail && swift test 2>&1 | tail -5
 
       - name: Build release app bundle
         run: |
@@ -44,7 +44,8 @@ jobs:
           hdiutil create -volname "MacPulse AI $VERSION" \
             -srcfolder dist/dmg-staging \
             -ov -format UDZO "dist/$DMG_NAME"
-          shasum -a 256 "dist/$DMG_NAME" > "dist/$DMG_NAME.sha256"
+          # checksum 文件内只含文件名本身，用户下载后可直接 shasum -c
+          ( cd dist && shasum -a 256 "$DMG_NAME" > "$DMG_NAME.sha256" )
           echo "dmg=dist/$DMG_NAME" >> "$GITHUB_OUTPUT"
           echo "sha=dist/$DMG_NAME.sha256" >> "$GITHUB_OUTPUT"
 
