@@ -47,8 +47,11 @@ enum DiskCleaner {
         case .devCaches:
             return [
                 home.appendingPathComponent("Library/Developer/Xcode/DerivedData", isDirectory: true),
+                home.appendingPathComponent("Library/Developer/CoreSimulator/Caches", isDirectory: true),
                 home.appendingPathComponent(".npm/_cacache", isDirectory: true),
                 home.appendingPathComponent(".gradle/caches", isDirectory: true),
+                home.appendingPathComponent("Library/Caches/ms-playwright", isDirectory: true),
+                home.appendingPathComponent("Library/Caches/CocoaPods", isDirectory: true),
             ]
         case .legacyVersions:
             return [

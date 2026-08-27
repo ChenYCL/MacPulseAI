@@ -177,8 +177,8 @@ final class ChatSession: ObservableObject {
             clipboardFindings: findings,
             clipboardRedacted: clipText == nil ? nil : redacted,
             includePath: store?.settings.includeProcessPath ?? true,
-            cores: monitor.coreCount
-        )
+            cores: monitor.coreCount,
+            loginItems: LaunchItemScanner.scan())
         sendInternal(text: L10n.s("安全体检：扫描异常行为与可疑进程", "Security audit: scan for anomalous behavior"),
                      wireContent: prompt)
     }
@@ -541,11 +541,11 @@ final class ChatSession: ObservableObject {
                     guard let command = action.command else { continue }
                     do {
                         let result = try await ShellRunner.run(command)
-                        feedback += L10n.s("[命令] \\(command)\\n[输出]\\n\\(result.output)\\n\\n",
-                                           "[command] \\(command)\\n[output]\\n\\(result.output)\\n\\n")
+                        feedback += L10n.s("[命令] \(command)\\n[输出]\\n\(result.output)\\n\\n",
+                                           "[command] \(command)\\n[output]\\n\(result.output)\\n\\n")
                     } catch {
-                        feedback += L10n.s("[命令] \\(command)\\n[错误] \\(error.localizedDescription)\\n\\n",
-                                           "[command] \\(command)\\n[error] \\(error.localizedDescription)\\n\\n")
+                        feedback += L10n.s("[命令] \(command)\\n[错误] \(error.localizedDescription)\\n\\n",
+                                           "[command] \(command)\\n[error] \(error.localizedDescription)\\n\\n")
                     }
                 }
                 await MainActor.run { [weak self] in

@@ -7,6 +7,7 @@ struct MaintenanceRunner {
         case emptyTrash   // 清空废纸篓（Finder）
         case purgeMemory  // /usr/sbin/purge 释放内存与磁盘缓存（无需 root）
         case flushDNS     // dscacheutil -flushcache && killall -HUP mDNSResponder（需管理员）
+        case rebuildLaunchServices // 重建 Launch Services 数据库（修复「打开方式」错乱/重复图标）
 
         var id: String { rawValue }
     }
@@ -33,6 +34,9 @@ struct MaintenanceRunner {
                                  ["-e", """
                                  do shell script "dscacheutil -flushcache; killall -HUP mDNSResponder" with administrator privileges
                                  """], false)
+        case .rebuildLaunchServices:
+            return try await run("/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister",
+                                 ["-kill", "-r", "-domain", "local", "-domain", "system", "-domain", "user"], false)
         }
     }
 

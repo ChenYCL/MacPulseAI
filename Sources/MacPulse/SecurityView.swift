@@ -42,12 +42,13 @@ struct SecurityView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     clipboardCard
+                    loginItemsCard
                     journalCard
                 }
                 .padding(16)
             }
         }
-        .onAppear(perform: refresh)
+        .onAppear { refresh(); rescanLaunchItems() }
         .onReceive(NotificationCenter.default.publisher(for: SafetyGuard.JournalChanged.name)) { _ in
             journal = SafetyGuard.journal
         }
@@ -133,6 +134,80 @@ struct SecurityView: View {
     }
 
     // MARK: SafetyGuard 审计日志
+
+    // MARK: 登录项（启动项）
+
+    @State private var launchItems: [LaunchItemScanner.LaunchItem] = []
+    @State private var launchError: String?
+
+    private var loginItemsCard: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "rectangle.stack.badge.person.crop").foregroundColor(.purple)
+                    Text(L10n.s("启动项（登录时自启）", "Startup items")).font(.headline)
+                    Spacer()
+                    Button(L10n.s("重新扫描", "Rescan")) { rescanLaunchItems() }
+                }
+                if launchItems.isEmpty {
+                    Text(L10n.s("未发现 LaunchAgents/LaunchDaemons 配置。", "No LaunchAgents/LaunchDaemons found."))
+                        .font(.caption).foregroundColor(.secondary)
+                }
+                ForEach(launchItems) { item in
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: item.scope == .user ? "person.crop.circle" : "lock.fill")
+                            .foregroundColor(item.scope == .user ? .purple : .secondary)
+                            .frame(width: 16)
+                        VStack(alignment: .leading, spacing: 1) {
+                            HStack(spacing: 6) {
+                                Text(item.label).font(.callout).fontWeight(.medium)
+                                Text(item.scope.title).font(.caption2).foregroundColor(.secondary)
+                                if let hint = item.suspiciousHint {
+                                    Text("⚠️ \(hint)").font(.caption2).foregroundColor(.red)
+                                }
+                            }
+                            Text(item.url.path).font(.caption2).foregroundColor(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer()
+                        if item.scope == .user {
+                            Button(L10n.s("移除", "Remove")) {
+                                do {
+                                    try LaunchItemScanner.removeUserItem(item)
+                                    launchItems.removeAll { $0.id == item.id }
+                                    SafetyGuard.log(verdict: "allowed",
+                                                    subject: L10n.s("移除启动项 \(item.label)", "Remove launch item \(item.label)"),
+                                                    reason: "moved to Trash")
+                                } catch {
+                                    launchError = error.localizedDescription
+                                }
+                            }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                            .help(L10n.s("移入废纸篓（可恢复）", "Move to Trash (restorable)"))
+                        } else {
+                            Text(L10n.s("需管理员", "admin")).font(.caption2).foregroundColor(.secondary)
+                        }
+                    }
+                    Divider().opacity(0.3)
+                }
+                if let launchError {
+                    Text(launchError).font(.caption).foregroundColor(.red)
+                }
+                Text(L10n.s("说明：全局级与系统守护项需要 root 授权，建议通过「系统设置 > 通用 > 登录项与扩展」管理；应用仅列出供审计。",
+                            "Global/daemon items need root — manage via System Settings > Login Items; listed here for audit only."))
+                    .font(.caption2).foregroundColor(.secondary)
+            }
+            .padding(12)
+        } label: {
+            Text(L10n.s("启动项", "Startup Items")).font(.headline)
+        }
+    }
+
+    private func rescanLaunchItems() {
+        launchItems = LaunchItemScanner.scan()
+        launchError = nil
+    }
 
     private var journalCard: some View {
         GroupBox {

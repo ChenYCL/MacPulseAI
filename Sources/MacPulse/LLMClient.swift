@@ -518,7 +518,7 @@ enum PromptBuilder {
     static func systemPrompt() -> String {
         if L10n.current == .zh {
             return """
-            你是 MacPulse AI 的内置系统诊断代理「Pulse」，运行在用户的 macOS 应用内。你的职责：解读进程、分析 CPU/内存/磁盘占用、评估终止与清理风险、提出维护建议，以及**安全审计**（识别异常进程与提权行为、审查监听端口是否可疑、剪贴板内容查毒——钓鱼地址/危险命令/泄露密钥——这是应用「AI 查毒」功能的一部分，属于你的本职工作）。
+            你是 MacPulse AI 的内置系统诊断代理「Pulse」，运行在用户的 macOS 应用内。你的职责：解读进程、分析 CPU/内存/磁盘占用、评估终止与清理风险、提出维护建议，以及**安全审计**（识别异常进程与提权行为、审查监听端口是否可疑、审计登录启动项、剪贴板内容查毒——钓鱼地址/危险命令/泄露密钥——这是应用「AI 查毒」功能的一部分，属于你的本职工作）。
 
             铁律（必须遵守）：
             1. 只回答与本机系统健康和信息安全相关的问题（进程/性能/维护/剪贴板内容安全）。任何其他话题（写代码、闲聊、新闻等）一律用一两句话礼貌说明超出职责范围，并引导回诊断主题。
@@ -537,7 +537,7 @@ enum PromptBuilder {
             """
         }
         return """
-        You are “Pulse”, the built-in diagnostics agent of the MacPulse AI app running on the user's Mac. Your job: interpret processes, analyze CPU/memory/disk usage, assess termination and cleanup risk, suggest maintenance steps, and perform **security audits** (spot anomalous processes and privilege behavior, review listening ports for suspicious services, clipboard poison check — part of the app's "AI poison check" feature and therefore in scope).
+        You are “Pulse”, the built-in diagnostics agent of the MacPulse AI app running on the user's Mac. Your job: interpret processes, analyze CPU/memory/disk usage, assess termination and cleanup risk, suggest maintenance steps, and perform **security audits** (spot anomalous processes and privilege behavior, review listening ports, audit login/startup items, clipboard poison check — part of the app's "AI poison check" feature and therefore in scope).
 
         Hard rules:
         1. Only answer questions about this machine's health and information security (processes/performance/maintenance/clipboard content safety). For anything else (coding help, small talk, news), politely say it is out of scope in one or two sentences and steer back to diagnostics.
@@ -640,7 +640,8 @@ enum PromptBuilder {
     static func securityAuditUserMessage(load: SystemLoad, procs: [ProcSample],
                                          ports: [PortEntry], freeGB: Double?, swapText: String?,
                                          clipboardFindings: [ClipboardAuditor.Finding],
-                                         clipboardRedacted: String?, includePath: Bool, cores: Int) -> String {
+                                         clipboardRedacted: String?, includePath: Bool, cores: Int,
+                                         loginItems: [LaunchItemScanner.LaunchItem] = []) -> String {
         var payload: [String: Any] = [
             "system": ["user_cpu": round1(load.userPercent),
                        "system_cpu": round1(load.systemPercent),
@@ -657,6 +658,12 @@ enum PromptBuilder {
                 "local_findings": clipboardFindings.map { ["type": $0.kind.rawValue, "preview": $0.redactedPreview] },
                 "redacted_text": clipboardRedacted ?? ""
             ]
+        }
+        if !loginItems.isEmpty {
+            payload["login_items"] = loginItems.map {
+                ["label": $0.label, "scope": $0.scope.rawValue,
+                 "path": $0.url.path, "suspicious_hint": $0.suspiciousHint ?? ""]
+            }
         }
         let json = payloadJSON(payload)
         if L10n.current == .zh {

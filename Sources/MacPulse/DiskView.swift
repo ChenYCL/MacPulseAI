@@ -8,14 +8,42 @@ struct DiskView: View {
     var onConfirmNeeds: (() -> Void)? = nil
     var onDismissNeeds: (() -> Void)? = nil
 
+    enum SubTab: String, CaseIterable, Identifiable {
+        case cleanup, uninstall
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .cleanup: return L10n.s("缓存清理", "Cleanup")
+            case .uninstall: return L10n.s("应用卸载", "Uninstall Apps")
+            }
+        }
+    }
+
+    @State private var subTab: SubTab = .cleanup
+
     var body: some View {
         VStack(spacing: 0) {
-            summaryBar
+            HStack(spacing: 0) {
+                Picker("", selection: $subTab) {
+                    ForEach(SubTab.allCases) { t in Text(t.title).tag(t) }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 240)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 6)
+                Spacer()
+            }
             Divider()
-            needsConfirmBar
-            maintenanceBar
-            Divider()
-            itemsList
+            if subTab == .cleanup {
+                summaryBar
+                Divider()
+                needsConfirmBar
+                maintenanceBar
+                Divider()
+                itemsList
+            } else {
+                AppUninstallView()
+            }
         }
         .onAppear { disk.rescan() }
     }

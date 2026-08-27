@@ -76,13 +76,24 @@ enum SafetyGuard {
                                  home: URL,
                                  mode: Mode,
                                  runningExecutablePaths: Set<String> = [],
-                                 totalBytes: Int64 = 0) -> RulingSet {
+                                 totalBytes: Int64 = 0,
+                                 explicitOutsideHomeAllowlist: [URL] = []) -> RulingSet {
+        let exemptPaths = Set(explicitOutsideHomeAllowlist.map { $0.standardizedFileURL.path })
         var allowed: [URL] = []
         var needs: [(URL, String)] = []
         var blocked: [(URL, String)] = []
 
         for url in urls {
             let path = url.standardizedFileURL.path
+            // 应用卸载等显式场景：豁免 /Applications 下的应用本体（仍走废纸篓 + HITL）
+            if exemptPaths.contains(path) {
+                if runningExecutablePaths.contains(where: { $0.hasPrefix(path + "/") }) {
+                    needs.append((url, L10n.s("应用正在运行，请先退出再卸载", "App is running — quit it first")))
+                } else {
+                    allowed.append(url)
+                }
+                continue
+            }
             // 系统路径
             if systemProtectedPrefixes.contains(where: { path == $0 || path.hasPrefix($0 + "/") || $0 == "/" && path == "/" }) {
                 blocked.append((url, L10n.s("系统路径受保护", "System path is protected")))

