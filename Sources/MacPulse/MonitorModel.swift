@@ -21,7 +21,7 @@ final class MonitorModel: ObservableObject {
     private let loadTracker = SystemLoadTracker()
     private var timer: Timer?
     private var isRunning = false
-    private var latestProcesses: [ProcSample] = []
+    private(set) var latestProcesses: [ProcSample] = []
     /// 窗口不可见时跳过 SwiftUI 表格刷新（渲染占大头），打开窗口立即补一次。
     /// 由 AppDelegate 依据 NSWindow.occlusionState 维护。
     private var isWindowVisible = true

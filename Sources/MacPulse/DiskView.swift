@@ -4,11 +4,15 @@ import SwiftUI
 /// AI 入口统一使用顶部工具栏的「AI 分析」（按当前标签页自动分派）。
 struct DiskView: View {
     @ObservedObject var disk: DiskModel
+    var needsConfirm: [(item: DiskCleaner.Item, reason: String)] = []
+    var onConfirmNeeds: (() -> Void)? = nil
+    var onDismissNeeds: (() -> Void)? = nil
 
     var body: some View {
         VStack(spacing: 0) {
             summaryBar
             Divider()
+            needsConfirmBar
             maintenanceBar
             Divider()
             itemsList
@@ -43,6 +47,46 @@ struct DiskView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+    }
+
+    @ViewBuilder
+    private var needsConfirmBar: some View {
+        if !needsConfirm.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Label(L10n.s("安全钩子要求人工确认", "Safety hook requires human confirmation"),
+                      systemImage: "hand.raised.fill")
+                    .font(.callout).foregroundColor(.orange)
+                ForEach(Array(needsConfirm.enumerated()), id: \.offset) { _, entry in
+                    HStack(alignment: .top, spacing: 6) {
+                        Text("•").font(.caption)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(entry.item.name).font(.caption).fontWeight(.medium)
+                            Text(entry.reason).font(.caption2).foregroundColor(.secondary)
+                        }
+                    }
+                }
+                HStack {
+                    Text(L10n.s("会发生什么：", "What happens:")).font(.caption2).foregroundColor(.secondary)
+                    let exp = SafetyGuard.explanation(kind: "clean")
+                    Text("\(exp.what)。\(exp.impact)。\(exp.recovery)。").font(.caption2).foregroundColor(.secondary)
+                }
+                HStack {
+                    Button(L10n.s("我已了解，继续清理这些条目", "I understand, clean these")) {
+                        onConfirmNeeds?()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.small)
+                    Button(L10n.s("暂不处理", "Not now")) {
+                        onDismissNeeds?()
+                    }
+                    .controlSize(.small)
+                }
+            }
+            .padding(10)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color.orange.opacity(0.10)))
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+        }
     }
 
     private var maintenanceBar: some View {

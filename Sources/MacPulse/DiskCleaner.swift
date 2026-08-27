@@ -7,15 +7,17 @@ enum DiskCleaner {
         case appCaches      // ~/Library/Caches/*
         case logs           // ~/Library/Logs/*
         case devCaches      // Xcode DerivedData、~/.npm、~/.gradle/caches
+        case legacyVersions // CLI 工具升级后的历史版本包（claude/cursor-agent versions 等）
 
         var id: String { rawValue }
 
-        /// Agent 动作协议使用蛇形命名（app_caches / logs / dev_caches）。
+        /// Agent 动作协议使用蛇形命名（app_caches / logs / dev_caches / legacy_versions）。
         static func fromWire(_ value: String) -> Category? {
             switch value.trimmingCharacters(in: .whitespaces).lowercased() {
             case "app_caches", "appcaches", "caches": return .appCaches
             case "logs": return .logs
             case "dev_caches", "devcaches", "dev": return .devCaches
+            case "legacy_versions", "versions", "history": return .legacyVersions
             default: return nil
             }
         }
@@ -25,6 +27,10 @@ enum DiskCleaner {
         let category: Category
         let url: URL
         let sizeBytes: Int64
+        /// 历史版本包：是否为旧版本（最新版本与运行中占用除外）。
+        var isLegacyVersion: Bool = false
+        /// 是否被运行中的进程占用（不可清理）。
+        var inUse: Bool = false
         var id: String { url.path }
 
         var name: String { url.lastPathComponent }
@@ -44,6 +50,13 @@ enum DiskCleaner {
                 home.appendingPathComponent(".npm/_cacache", isDirectory: true),
                 home.appendingPathComponent(".gradle/caches", isDirectory: true),
             ]
+        case .legacyVersions:
+            return [
+                home.appendingPathComponent(".local/share/claude/versions", isDirectory: true),
+                home.appendingPathComponent(".local/share/cursor-agent/versions", isDirectory: true),
+                home.appendingPathComponent(".local/share/opencode/versions", isDirectory: true),
+                home.appendingPathComponent(".claude/local", isDirectory: true),
+            ]
         }
     }
 
@@ -62,7 +75,9 @@ enum DiskCleaner {
     }
 
     /// 扫描某类别下的条目（一级子目录为一个候选），按大小降序。
-    static func scan(category: Category, home: URL, minItemBytes: Int64 = 1_048_576) -> [Item] {
+    /// runningExecutablePaths：当前运行中进程的可执行路径，用于把历史版本目录标记为「占用中」。
+    static func scan(category: Category, home: URL, minItemBytes: Int64 = 1_048_576,
+                     runningExecutablePaths: Set<String> = []) -> [Item] {
         var items: [Item] = []
         for root in roots(for: category, home: home) {
             let contents = (try? FileManager.default.contentsOfDirectory(
@@ -83,7 +98,58 @@ enum DiskCleaner {
                 }
             }
         }
-        return items.sorted { $0.sizeBytes > $1.sizeBytes }
+        var result = items.sorted { $0.sizeBytes > $1.sizeBytes }
+        if category == .legacyVersions {
+            result = Self.filterLegacyVersions(result, runningExecutablePaths: runningExecutablePaths)
+        }
+        return result
+    }
+
+    /// 历史版本过滤：同一 versions 父目录下，仅保留「最新语义版本」与「运行中占用」的条目，
+    /// 其余标记为旧版本（可清理）。
+    static func filterLegacyVersions(_ items: [Item], runningExecutablePaths: Set<String>) -> [Item] {
+        func versionKey(_ name: String) -> [Int]? {
+            let core = name.hasPrefix("v") ? String(name.dropFirst()) : name
+            let parts = core.split(separator: ".").map { Int($0) }
+            guard !parts.isEmpty, parts.allSatisfy({ $0 != nil }) else { return nil }
+            return parts.map { $0! }
+        }
+        func isNewer(_ a: [Int], than b: [Int]) -> Bool {
+            for i in 0..<max(a.count, b.count) {
+                let x = i < a.count ? a[i] : 0
+                let y = i < b.count ? b[i] : 0
+                if x != y { return x > y }
+            }
+            return false
+        }
+        func isInUse(_ item: Item) -> Bool {
+            runningExecutablePaths.contains { $0.hasPrefix(item.url.path) }
+        }
+
+        var groups: [String: [Int]] = [:]   // 父目录 path -> 最新版本 key
+        for item in items where isInUse(item) == false {
+            let parent = item.url.deletingLastPathComponent().path
+            if let key = versionKey(item.name) {
+                if let current = groups[parent], !isNewer(key, than: current) { continue }
+                groups[parent] = key
+            }
+        }
+
+        return items.map { item -> Item in
+            var copy = item
+            let parent = item.url.deletingLastPathComponent().path
+            if var key = versionKey(item.name), let newest = groups[parent] {
+                if isNewer(newest, than: key) || key == newest {
+                    // 最新版本 → 不视为旧版本
+                } else {
+                    copy.isLegacyVersion = true
+                }
+                key = newest // silence unused warning in release
+            }
+            copy.inUse = isInUse(item)
+            if copy.inUse { copy.isLegacyVersion = false }
+            return copy
+        }
     }
 
     /// 将条目移入系统废纸篓（可恢复）。返回逐条结果。
@@ -92,19 +158,6 @@ enum DiskCleaner {
         items.map { item -> (Item, Result<Void, Error>) in
             do {
                 _ = try FileManager.default.trashItem(at: item.url, resultingItemURL: nil)
-                return (item, .success(()))
-            } catch {
-                return (item, .failure(error))
-            }
-        }
-    }
-
-    /// 直删变体（仅 dev 缓存提供）：直接删除而非移入废纸篓。
-    @discardableResult
-    static func deleteDirectly(items: [Item]) -> [(Item, Result<Void, Error>)] {
-        items.map { item -> (Item, Result<Void, Error>) in
-            do {
-                try FileManager.default.removeItem(at: item.url)
                 return (item, .success(()))
             } catch {
                 return (item, .failure(error))

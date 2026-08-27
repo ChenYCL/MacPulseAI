@@ -17,7 +17,7 @@ struct AppView: View {
     @State private var activePane: Pane = .processes
 
     enum Pane: String, CaseIterable, Identifiable {
-        case processes, disk, ports
+        case processes, disk, ports, security
         var id: String { rawValue }
 
         var title: String {
@@ -25,6 +25,7 @@ struct AppView: View {
             case .processes: return L10n.s("进程", "Processes")
             case .disk: return L10n.s("磁盘", "Disk")
             case .ports: return L10n.s("端口", "Ports")
+            case .security: return L10n.s("安全", "Security")
             }
         }
     }
@@ -88,17 +89,21 @@ struct AppView: View {
                 actionBar
             } else if activePane == .disk {
                 HStack(spacing: 0) {
-                    DiskView(disk: disk)
+                    DiskView(disk: disk, needsConfirm: disk.pendingNeeds,
+                             onConfirmNeeds: { disk.confirmPendingNeeds() },
+                             onDismissNeeds: { disk.dismissPendingNeeds() })
                     if showAIPanel {
                         Divider()
                         ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
                                   onClose: { showAIPanel = false })
                     }
                 }
-            } else {
+            } else if activePane == .ports {
                 PortView(chat: chat, configProvider: { store.settings.llmConfig() },
                          onOpenChat: { ensureChatConfigured(); showAIPanel = true },
                          monitor: model)
+            } else {
+                SecurityView(chat: chat, onOpenChat: { ensureChatConfigured(); showAIPanel = true })
             }
             if let msg = model.statusMessage, activePane == .processes {
                 Divider()
@@ -123,6 +128,7 @@ struct AppView: View {
             model.apply(settings: store.settings)
             L10n.overrideCode = store.settings.uiLanguage
             selection.removeAll()
+            disk.runningPathsProvider = { Set(model.latestProcesses.map(\.path)) }
             if !chatConfigured {
                 chat.configure(monitor: model, store: store)
                 chat.setDiskModel(disk)
@@ -402,6 +408,7 @@ struct AppView: View {
         case .processes: return L10n.s("AI 分析", "AI Analyze")
         case .disk: return L10n.s("AI 分析磁盘", "Analyze Disk")
         case .ports: return L10n.s("AI 分析端口", "Analyze Ports")
+        case .security: return L10n.s("AI 查毒", "Security Check")
         }
     }
 
@@ -413,6 +420,8 @@ struct AppView: View {
                                   "Review scanned items (cleanup needs your confirmation)")
         case .ports: return L10n.s("让 AI 审查监听端口是否可疑",
                                    "Let the AI review listening ports")
+        case .security: return L10n.s("把脱敏后的剪贴板内容交给 AI 审查是否疑似恶意",
+                                      "Send the redacted clipboard to the AI for a malicious-content review")
         }
     }
 
@@ -433,6 +442,10 @@ struct AppView: View {
             showAIPanel = true
             chat.send(draft: L10n.s("分析一下当前监听端口里有哪些可能异常的服务",
                                     "Review the listening ports and flag anything suspicious"))
+        case .security:
+            showAIPanel = true
+            ensureChatConfigured()
+            chat.auditClipboardWithAI()
         }
     }
 

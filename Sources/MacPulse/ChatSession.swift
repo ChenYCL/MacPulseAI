@@ -87,6 +87,44 @@ final class ChatSession: ObservableObject {
         sendInternal(text: label, wireContent: prompt)
     }
 
+    /// 安全页的「AI 查毒」：把脱敏后的剪贴板内容交给模型审查恶意性。
+    func auditClipboardWithAI() {
+        guard let text = ClipboardAuditor.currentClipboardText(), !text.isEmpty else {
+            injectSystemNotice(L10n.s("剪贴板当前没有文本内容", "Clipboard has no text content"))
+            return
+        }
+        let findings = ClipboardAuditor.audit(text)
+        let redacted = ClipboardAuditor.redactAll(text)
+        let localSummary: String
+        if findings.isEmpty {
+            localSummary = L10n.s("本地模式未发现敏感模式。", "Local scan found no sensitive patterns.")
+        } else {
+            let list = findings.map { "\($0.kind.rawValue): \($0.redactedPreview)" }.joined(separator: "\n")
+            localSummary = L10n.s("本地初判发现以下敏感类型（内容已遮蔽）：\n\(list)", "Local scan flagged: \n\(list)")
+        }
+        let prompt: String
+        if L10n.current == .zh {
+            prompt = """
+            请做剪贴板安全检查。以下是【脱敏后】的剪贴板文本（密钥/地址类已替换为 [REDACTED:*]，命令保留原文以便分析）：
+            ```
+            \(redacted)
+            ```
+            \(localSummary)
+            请判断：1) 是否疑似恶意内容（钓鱼地址、危险命令等）？2) 若是危险命令，它会造成什么后果？3) 给出安全处置建议。若内容无害请直说。
+            """
+        } else {
+            prompt = """
+            Please perform a clipboard security check. Below is the [REDACTED] clipboard text (secrets/addresses replaced with [REDACTED:*]; commands kept verbatim for analysis):
+            ```
+            \(redacted)
+            ```
+            \(localSummary)
+            Assess: 1) whether it looks malicious (phishing address, dangerous command); 2) what a dangerous command would do; 3) safe handling advice. If it is harmless, say so.
+            """
+        }
+        sendInternal(text: L10n.s("AI 查毒：检查剪贴板内容", "Clipboard security review"), wireContent: prompt)
+    }
+
     /// 磁盘页的「AI 分析」：携带扫描聚合数据。
     func startDiskAnalysis(items: [DiskCleaner.Item], freeGBText: String?) {
         var freeGB: Double?
@@ -151,6 +189,9 @@ final class ChatSession: ObservableObject {
                         let done = L10n.s("维护完成：\(task.rawValue)", "Completed: \(task.rawValue)")
                         self.markAction(messageID: messageID, actionID: action.id, result: done)
                         self.injectSystemNotice(done)
+                        SafetyGuard.log(verdict: "allowed",
+                                        subject: L10n.s("HITL 维护 \(task.rawValue)", "HITL maintenance \(task.rawValue)"),
+                                        reason: "user confirmed")
                         if task == .emptyTrash {
                             self.diskModel.rescan()
                         }
@@ -192,6 +233,9 @@ final class ChatSession: ObservableObject {
                             "\(force ? "Force quit" : "Quit") \(proc.name) (PID \(pid))")
         markAction(messageID: messageID, actionID: action.id, result: okText)
         injectSystemNotice(okText)
+        SafetyGuard.log(verdict: "allowed",
+                        subject: L10n.s("HITL 终止 \(proc.name) (PID \(pid))", "HITL terminate \(proc.name) (PID \(pid))"),
+                        reason: force ? "SIGKILL" : "SIGTERM")
         monitor.tick()
         scheduleRecheckNote(pid: pid, name: proc.name)
     }
