@@ -5,7 +5,7 @@ import Combine
 @MainActor
 final class ChatSession: ObservableObject {
     struct ChatMessage: Identifiable, Codable {
-        enum Sender: String, Codable { case user, assistant, systemNotice }
+        enum Sender: String, Codable { case user, assistant, systemNotice, toolResult }
         struct ProposedAction: Identifiable, Codable {
             let action: AgentActionParser.Action
             /// 提议时的进程名快照（进程随后退出也能在卡片上显示）。
@@ -224,6 +224,8 @@ final class ChatSession: ObservableObject {
         switch action.kind {
         case .quit, .forceKill:
             executeKill(action: action, in: messageID)
+        case .shell:
+            executeShell(action: action, in: messageID)
         case .clean:
             Task { [weak self] in
                 let result = await self?.diskModel.clean(categoryRaw: action.target ?? "")
@@ -263,6 +265,90 @@ final class ChatSession: ObservableObject {
                         self.lastError = error.localizedDescription
                     }
                 }
+            }
+        }
+    }
+
+    /// 执行受控 shell 命令：按 SafetyHook 分级处理。
+    private func executeShell(action: AgentActionParser.Action, in messageID: UUID) {
+        guard let command = action.command else {
+            markAction(messageID: messageID, actionID: action.id,
+                       result: L10n.s("命令为空", "empty command"))
+            return
+        }
+        let verdict = ShellGuard.evaluate(command)
+        switch verdict {
+        case .blocked(let reason):
+            markAction(messageID: messageID, actionID: action.id,
+                       result: L10n.s("🛡 已拦截：\(reason)", "🛡 blocked: \(reason)"))
+            injectSystemNotice(L10n.s("🛡 安全钩子已拦截命令：\(command.prefix(120))",
+                                      "🛡 Safety hook blocked: \(command.prefix(120))"))
+            SafetyGuard.log(verdict: "blocked", subject: "shell: \(command.prefix(80))", reason: reason)
+
+        case .readOnly:
+            markAction(messageID: messageID, actionID: action.id,
+                       result: L10n.s("执行中…", "running…"))
+            runShellCommand(command, actionID: action.id, messageID: messageID,
+                            note: L10n.s("只读命令已自动执行", "read-only command executed automatically"))
+
+        case .needsConfirm(let reason):
+            // 卡片已是 pending 态，确认按钮的 onExecute 会再进来一次；
+            // 这里通过 resultText 提示原因，并把确认流程放到 CardPendingConfirm 标志位
+            markAction(messageID: messageID, actionID: action.id,
+                       result: L10n.s("待确认：\(reason)", "needs confirmation: \(reason)"))
+            pendingShellConfirm[action.id] = command
+            SafetyGuard.log(verdict: "needsExplicitConfirm", subject: "shell: \(command.prefix(80))", reason: reason)
+        }
+    }
+
+    /// 待确认 shell 命令（HITL）：卡片的确认按钮二次触发时真正执行。
+    private var pendingShellConfirm: [String: String] = [:]
+
+    /// 用户点击卡片「确认执行」——对 shell 动作执行确认后运行。
+    func confirmShell(action: AgentActionParser.Action, in messageID: UUID) {
+        let key = action.id
+        guard let command = pendingShellConfirm[key] else {
+            execute(action: action, in: messageID)
+            return
+        }
+        pendingShellConfirm.removeValue(forKey: key)
+        markAction(messageID: messageID, actionID: action.id,
+                   result: L10n.s("执行中…", "running…"))
+        runShellCommand(command, actionID: action.id, messageID: messageID,
+                        note: L10n.s("已按人工确认执行", "executed after human confirmation"))
+    }
+
+    private func runShellCommand(_ command: String, actionID: String, messageID: UUID, note: String) {
+        SafetyGuard.log(verdict: "allowed", subject: "shell: \(command.prefix(80))", reason: note)
+        Task { [weak self] in
+            let result: ShellRunner.Result
+            do {
+                result = try await ShellRunner.run(command)
+            } catch {
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    self.markAction(messageID: messageID, actionID: actionID,
+                                    result: L10n.s("执行失败：\(error.localizedDescription)",
+                                                   "failed: \(error.localizedDescription)"))
+                    self.lastError = error.localizedDescription
+                }
+                return
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                let statusPrefix = result.exitCode == 0
+                    ? L10n.s("✅ 完成", "✅ done")
+                    : L10n.s("⚠️ 退出码 \(result.exitCode)", "⚠️ exit \(result.exitCode)")
+                let outputText = result.output.isEmpty
+                    ? L10n.s("（无输出）", "(no output)")
+                    : result.output
+                let feedback = L10n.s("\(statusPrefix)：\(command)",
+                                      "\(statusPrefix): \(command)")
+                    + "\n```\n\(outputText)\n```"
+                self.markAction(messageID: messageID, actionID: actionID,
+                                result: statusPrefix + " · " + L10n.s("输出见对话", "see output in chat"))
+                self.injectToolResult(feedback)
+                self.persist()
             }
         }
     }
@@ -324,11 +410,8 @@ final class ChatSession: ObservableObject {
         runCompletion(wireContent: wireContent ?? text)
     }
 
-    private func runCompletion(wireContent: String?) {
-        guard let monitor, let store else { return }
-        lastError = nil
-
-        // 组装多轮上下文：system + 历史(user/assistant 去掉动作标记残留文本即可原样) + 当前轮
+    private func buildHistory(wireContent: String?) -> [LLMMessage] {
+        guard let monitor else { return [.system(systemPrompt)] }
         var history: [LLMMessage] = [.system(systemPrompt)]
         for m in messages where m.sender != .systemNotice {
             switch m.sender {
@@ -336,55 +419,56 @@ final class ChatSession: ObservableObject {
                 history.append(.user(resolvedWireText(for: m)))
             case .assistant:
                 history.append(.assistant(m.content))
-            default:
+            case .toolResult:
+                history.append(.user(L10n.s("[工具执行结果] ", "[tool result] ") + m.content))
+            case .systemNotice:
                 break
             }
         }
-        // 最新一轮用完整 wire 内容；更早的轮次已是纯文本
         if let wire = wireContent, let lastIdx = history.indices.last, history[lastIdx].role == .user {
             history[lastIdx] = .user(wire)
         }
+        let summary = PromptBuilder.contextSummary(load: monitor.load,
+                                                   procs: monitor.processes.sorted { $0.cpuPercent > $1.cpuPercent })
+        history.append(.user(summary))
+        return history
+    }
+
+    private func runCompletion(wireContent: String?) {
+        guard let monitor else { return }
+        lastError = nil
+
+        var history = buildHistory(wireContent: wireContent)
         // 每轮注入实时摘要，便于模型跟踪状态变化
         let summary = PromptBuilder.contextSummary(load: monitor.load,
                                                    procs: monitor.processes.sorted { $0.cpuPercent > $1.cpuPercent })
         history.append(.user(summary))
-        // Anthropic 要求 assistant 收尾后的下一条必须是 user；当前最后一条即 user ✓
 
         let placeholder = ChatMessage(sender: .assistant, content: "")
         messages.append(placeholder)
         let placeholderID = placeholder.id
+        persist()
+
+        streamInto(messages: history, placeholderID: placeholderID, depth: 0)
+    }
+
+    /// 流式一轮作答；结束后 finishAssistant 解析 HITL 动作与工具请求（可递归续答，depth 防循环）。
+    private func streamInto(messages history: [LLMMessage], placeholderID: UUID, depth: Int) {
+        guard let store else { return }
         isStreaming = true
 
         streamingTask?.cancel()
         streamingTask = Task { [weak self] in
             do {
                 guard let self else { return }
-                let service = LLMServiceFactory.service(for: store.settings.llmConfig())
-                var raw = try await service.stream(messages: history) { delta in
-                    Task { @MainActor [weak self] in
-                        guard let self, self.isStreaming else { return }
-                        self.appendToMessage(id: placeholderID, delta: delta)
-                    }
-                }
-
-                // Agent 工具环：模型请求最新实时快照时，回填 fresh 上下文再补一轮作答（最多一次）
-                if Self.requestsSnapshot(raw), !Task.isCancelled {
-                    updateMessage(id: placeholderID) { $0.content = "" } // 清空重来，避免展示工具标记
-                    history.append(.assistant(raw))
-                    let fresh = PromptBuilder.contextSummary(
-                        load: monitor.load,
-                        procs: monitor.processes.sorted { $0.cpuPercent > $1.cpuPercent })
-                        + "\n" + L10n.s("[以上为刚回填的最新实时数据]", "[Fresh live data injected above]")
-                    history.append(.user(fresh))
-                    raw = try await service.stream(messages: history) { delta in
+                let raw = try await LLMServiceFactory.service(for: store.settings.llmConfig())
+                    .stream(messages: history) { delta in
                         Task { @MainActor [weak self] in
                             guard let self, self.isStreaming else { return }
                             self.appendToMessage(id: placeholderID, delta: delta)
                         }
                     }
-                }
-
-                finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(raw))
+                finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(raw), depth: depth)
                 persist()
             } catch is CancellationError {
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(collectPartial(id: placeholderID)))
@@ -416,8 +500,12 @@ final class ChatSession: ObservableObject {
 
     /// 完成后解析动作标记：正文剥离标记、生成 HITL 卡片（附提议时的进程名），
     /// 同时把建议的 PID 联动到进程表（标红 + 置顶）。
-    private func finishAssistant(id: UUID, rawText: String) {
-        let (clean, actions) = AgentActionParser.parse(rawText)
+    /// Agent 工具环：
+    /// - `<tool name="snapshot"/>` → 回填最新实时摘要并续答；
+    /// - `<shell>…</shell>` 经 SafetyGuard 分级：只读命令自动执行并把输出回填后续答；
+    ///   写/未知命令生成 HITL 待确认卡；危险命令直接拦截。depth 防止无限循环。
+    private func finishAssistant(id: UUID, rawText: String, depth: Int = 0) {
+        let (clean, actions) = AgentActionParser.parseWithShell(rawText)
         updateMessage(id: id) { m in
             m.content = clean
             m.actions = actions.map { action in
@@ -429,6 +517,61 @@ final class ChatSession: ObservableObject {
         }
         refreshFlagged()
         persist()
+
+        // —— 工具环 ——
+        if Self.requestsSnapshot(rawText), depth < 2 {
+            let fresh = PromptBuilder.contextSummary(
+                load: monitor?.load ?? .zero,
+                procs: (monitor?.processes ?? []).sorted { $0.cpuPercent > $1.cpuPercent })
+                + "\n" + L10n.s("[以上为刚回填的最新实时数据]", "[Fresh live data injected above]")
+            injectSystemNotice(L10n.s("已回填最新实时快照，继续分析…", "Fresh snapshot injected, continuing…"))
+            continueStream(injecting: fresh, afterCleaning: id, depth: depth + 1)
+            return
+        }
+
+        let autoShell = actions.filter { action in
+            guard action.kind == .shell, let command = action.command else { return false }
+            if case .readOnly = ShellGuard.evaluate(command) { return true }
+            return false
+        }
+        if !autoShell.isEmpty, depth < 2 {
+            Task { [weak self] in
+                var feedback = ""
+                for action in autoShell {
+                    guard let command = action.command else { continue }
+                    do {
+                        let result = try await ShellRunner.run(command)
+                        feedback += L10n.s("[命令] \\(command)\\n[输出]\\n\\(result.output)\\n\\n",
+                                           "[command] \\(command)\\n[output]\\n\\(result.output)\\n\\n")
+                    } catch {
+                        feedback += L10n.s("[命令] \\(command)\\n[错误] \\(error.localizedDescription)\\n\\n",
+                                           "[command] \\(command)\\n[error] \\(error.localizedDescription)\\n\\n")
+                    }
+                }
+                await MainActor.run { [weak self] in
+                    guard let self else { return }
+                    // 卡片同步显示执行结果
+                    for action in autoShell {
+                        if let mid = self.messages.last(where: { $0.id == id })?.id,
+                           let mi = self.messages.firstIndex(where: { $0.id == mid }),
+                           let ai = self.messages[mi].actions.firstIndex(where: { $0.id == action.id }) {
+                            self.messages[mi].actions[ai].state = .executed
+                            self.messages[mi].actions[ai].resultText = L10n.s("已自动执行", "auto-executed")
+                        }
+                    }
+                    self.injectToolResult(feedback)
+                    let note = L10n.s("[以上为只读命令的自动执行结果，请基于它继续回答]", "[read-only command output injected above — continue]")
+                    self.continueStream(injecting: note, afterCleaning: id, depth: depth + 1)
+                }
+            }
+        }
+    }
+
+    /// 工具结果回填后的一轮流式续答（追加到同一占位气泡）。
+    private func continueStream(injecting feedback: String, afterCleaning id: UUID, depth: Int) {
+        var history = buildHistory(wireContent: nil)
+        history.append(.user(feedback))
+        streamInto(messages: history, placeholderID: id, depth: depth)
     }
 
     /// 汇总所有仍待确认的 kill 动作，驱动进程表的 AI 标记。
@@ -458,6 +601,12 @@ final class ChatSession: ObservableObject {
 
     private func injectSystemNotice(_ text: String) {
         messages.append(ChatMessage(sender: .systemNotice, content: text))
+        persist()
+    }
+
+    /// 工具执行结果：UI 显示为系统反馈行，同时以 user 角色回灌给模型（模型可见输出）。
+    private func injectToolResult(_ text: String) {
+        messages.append(ChatMessage(sender: .toolResult, content: text))
         persist()
     }
 

@@ -207,6 +207,13 @@ struct MessageBubble: View {
                     Text(message.content).font(.caption)
                 }
                 .foregroundColor(.green)
+            case .toolResult:
+                HStack(spacing: 5) {
+                    Image(systemName: "terminal.fill").font(.caption2)
+                    Text(message.content).font(.caption)
+                }
+                .foregroundColor(.blue)
+                .frame(maxWidth: .infinity, alignment: .leading)
             case .user:
                 bubble(color: Color.accentColor.opacity(0.16), alignment: .trailing) {
                     Text(message.content)
@@ -247,29 +254,44 @@ struct MessageBubble: View {
 
 
     /// HITL 动作卡：AI 提议的终止操作必须由用户点击确认。
+    private func iconFor(_ kind: AgentActionParser.Kind) -> String {
+        switch kind {
+        case .quit: return "xmark.circle"
+        case .forceKill: return "xmark.octagon.fill"
+        case .clean: return "paintbrush.fill"
+        case .maintenance: return "wrench.and.screwdriver.fill"
+        case .shell: return "terminal.fill"
+        }
+    }
+
     @ViewBuilder
     private func actionCard(_ proposed: ChatSession.ChatMessage.ProposedAction) -> some View {
         let kindLabel: String = {
             switch proposed.action.kind {
             case .quit: return L10n.s("退出进程", "Quit process")
             case .forceKill: return L10n.s("强制退出", "Force quit")
-            case .clean:
-                return L10n.s("清理缓存", "Clean caches")
-            case .maintenance:
-                return L10n.s("执行维护", "Run maintenance")
+            case .clean: return L10n.s("清理缓存", "Clean caches")
+            case .maintenance: return L10n.s("执行维护", "Run maintenance")
+            case .shell: return L10n.s("执行命令", "Run command")
             }
         }()
         let signalHelp: String = {
             switch proposed.action.kind {
             case .quit: return "SIGTERM · \(L10n.s("温和，可保存数据后退出", "graceful, allows saving"))"
             case .forceKill: return "SIGKILL · \(L10n.s("立即终止，可能丢数据", "immediate, may lose data"))"
+            case .shell: return ShellGuard.evaluate(proposed.action.command ?? "").badgeText
             default: return ""
             }
         }()
-        let targetText = proposed.action.target ?? proposed.displayTitle()
+        let targetText: String = {
+            if proposed.action.kind == .shell, let cmd = proposed.action.command {
+                return cmd
+            }
+            return proposed.action.target ?? proposed.displayTitle()
+        }()
         let isDestructive = proposed.action.kind == .forceKill
         HStack(spacing: 8) {
-            Image(systemName: isDestructive ? "xmark.octagon.fill" : "wrench.and.screwdriver.fill")
+            Image(systemName: iconFor(proposed.action.kind))
                 .foregroundColor(isDestructive ? .red : .orange)
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 6) {

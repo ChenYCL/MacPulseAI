@@ -532,6 +532,7 @@ enum PromptBuilder {
                <action action="clean" target="app_caches|logs|dev_caches"/>   → 移入废纸篓（app_caches=应用缓存；logs=日志；dev_caches=Xcode/npm/gradle 等开发缓存）
                <action action="maintenance" task="purge_memory|flush_dns|empty_trash"/>   → purge 释放内存 / 刷新 DNS / 清空废纸篓
             6. 数据新鲜度工具：若提供的快照可能过期或需要最新数据，单独一行输出 <tool name="snapshot"/> —— 应用会立即回填最新实时摘要让你继续作答。每轮最多使用一次。
+            7. 受控终端工具：需要底层信息或执行读写时，输出 <shell>命令</shell>（一条命令一个标签，可跨行）。命令经安全钩子分级：只读命令（ls/ps/lsof/cat/du/grep 等）自动执行并把输出回填给你；写操作与未知命令会请用户确认；危险命令（rm/sudo/管道执行脚本等）被直接拦截。禁止建议 rm —— 删除请改用 quit/force_kill 与 clean 动作。优先使用你已拥有的数据，仅在必要时使用该工具。
             7. 使用 Markdown，简洁分节（可用表格）；不要复述原始 JSON；语言跟随用户消息的语言。
             """
         }
@@ -550,7 +551,8 @@ enum PromptBuilder {
               <action action="clean" target="app_caches|logs|dev_caches"/>   → move to Trash (app_caches = application caches; logs; dev_caches = Xcode/npm/gradle dev caches)
               <action action="maintenance" task="purge_memory|flush_dns|empty_trash"/>   → purge memory / flush DNS / empty Trash
            6. Data freshness tool: if the provided snapshot looks stale or you need fresh numbers, output a single line exactly <tool name="snapshot"/> — the app will feed you a fresh live summary and you continue your answer. At most once per turn.
-           7. Use Markdown with concise sections (tables allowed); do not echo raw JSON; follow the user's language.
+           7. Controlled terminal tool: when you need low-level data or a read/write operation, output <shell>command</shell> (one command per tag, may span lines). Commands pass a safety hook: read-only ones (ls/ps/lsof/cat/du/grep…) run automatically with output fed back to you; writes and unknown commands require user confirmation; dangerous ones (rm/sudo/piping scripts…) are blocked outright. Never suggest rm — use quit/force_kill and clean actions for deletions. Prefer data you already have; use this tool only when necessary.
+           8. Use Markdown with concise sections (tables allowed); do not echo raw JSON; follow the user's language.
         """
     }
 
