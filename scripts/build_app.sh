@@ -3,21 +3,33 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-swift build -c release
+# 显式双架构：在 Apple Silicon 上 `swift build -c release` 实测只产出 x86_64，
+# 装到 M 系机器上会整个跑在 Rosetta 里。发布包必须是 universal。
+# 传 UNIVERSAL=0 可以跳过（本地迭代时快一半）。
+if [ "${UNIVERSAL:-1}" = "1" ]; then
+  swift build -c release --arch arm64 --arch x86_64
+  BIN=".build/apple/Products/Release/MacPulse"
+  RES_DIR=".build/apple/Products/Release"
+else
+  swift build -c release
+  BIN=".build/release/MacPulse"
+  RES_DIR=".build/release"
+fi
+[ -f "$BIN" ] || { echo "找不到产物 $BIN" >&2; exit 1; }
 
 APP="build/MacPulse.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp .build/release/MacPulse "$APP/Contents/MacOS/MacPulse"
+cp "$BIN" "$APP/Contents/MacOS/MacPulse"
 cp scripts/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
 # 五行原画：扁平拷进 Resources，NSImage(named:) 与 MythAsset 都能找到
 if [ -d Sources/MacPulse/Resources ]; then
   cp -f Sources/MacPulse/Resources/* "$APP/Contents/Resources/" 2>/dev/null || true
 fi
 # SPM resource bundle（swift run / 测试路径）
-if [ -d .build/release/MacPulse_MacPulse.bundle ]; then
+if [ -d "$RES_DIR/MacPulse_MacPulse.bundle" ]; then
   rm -rf "$APP/Contents/Resources/MacPulse_MacPulse.bundle"
-  cp -R .build/release/MacPulse_MacPulse.bundle "$APP/Contents/Resources/"
+  cp -R "$RES_DIR/MacPulse_MacPulse.bundle" "$APP/Contents/Resources/"
 fi
 
 cat > "$APP/Contents/Info.plist" <<EOF
@@ -30,8 +42,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleIdentifier</key><string>com.chenycl.macpulseai</string>
     <key>CFBundleExecutable</key><string>MacPulse</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>${MARKETING_VERSION:-2.4.0}</string>
+    <key>CFBundleVersion</key><string>${BUILD_VERSION:-2400}</string>
     <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
     <key>CFBundleLocalizations</key>
     <array>
@@ -49,4 +61,4 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 codesign --force --sign - "$APP" >/dev/null
-echo "Built $(pwd)/$APP"
+echo "Built $(pwd)/$APP  ($(lipo -archs "$APP/Contents/MacOS/MacPulse" 2>/dev/null || echo unknown))"
