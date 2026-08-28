@@ -37,6 +37,8 @@ struct RosterScreen: View {
     var onRunSkill: (Skill) -> Void = { _ in }
     var onRemoveSkill: (Skill) -> Void = { _ in }
     var onImportSkills: ([URL]) -> Void = { _ in }
+    /// 导入/删除的结果反馈；nil 时显示常规提示。
+    var skillMessage: String? = nil
     var onEnter: () -> Void = {}
     var onAnalyze: () -> Void = {}
     var onSettings: () -> Void = {}
@@ -115,9 +117,12 @@ struct RosterScreen: View {
     }
 
     /// 轨道角：选中项落在正下方（θ=π/2），也就是离镜头最近的那一点。
+    ///
+    /// 角度取负是为了让轨道顺序和顶栏标签顺序一致：下一界（index+1）出现在**右边**。
+    /// 写成正的话 index+1 会跑到左边，于是按「›」是把左边那只拉进来 —— 切换方向反了。
     private func orbitAngle(_ index: Int) -> Double {
         let n = Double(count)
-        return (Double(index) - focus) / n * 2 * .pi + .pi / 2
+        return .pi / 2 - (Double(index) - focus) / n * 2 * .pi
     }
 
     private func orbitBeast(_ pane: AppView.Pane, index: Int, frontSize: CGFloat,
@@ -226,9 +231,11 @@ struct RosterScreen: View {
                 VStack(alignment: .leading, spacing: 8) {
                     HStack(spacing: 8) {
                         SectionLabel(L10n.s("技能 · SKILLS", "SKILLS"))
-                        Text(L10n.s("点一下就把这件事交给 AI", "One click hands it to the AI"))
+                        Text(skillMessage ?? L10n.s("点一下就把这件事交给 AI", "One click hands it to the AI"))
                             .font(.system(size: 9))
-                            .foregroundColor(Studio.inkTertiary.opacity(0.8))
+                            .foregroundColor(skillMessage == nil
+                                             ? Studio.inkTertiary.opacity(0.8) : theme.primary)
+                            .lineLimit(1)
                     }
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 8) {

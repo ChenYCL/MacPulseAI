@@ -37,6 +37,10 @@ struct Skill: Identifiable, Codable, Equatable {
             .joined(separator: "-")
         guard !safeID.isEmpty else { return nil }
 
+        // builtin- 前缀是内置技能的命名空间。放进来会和内置技能同 id，
+        // ForEach 拿到两个相同的 Identifiable，SwiftUI 的行为就未定义了。
+        guard !safeID.hasPrefix("builtin-") else { return nil }
+
         let pane = AppView.Pane(rawValue: raw.pane) != nil ? raw.pane : ""
         let icon = NSImage(systemSymbolName: raw.icon, accessibilityDescription: nil) != nil
             ? raw.icon : "sparkles"
@@ -54,7 +58,10 @@ struct Skill: Identifiable, Codable, Equatable {
 @MainActor
 final class SkillStore: ObservableObject {
     @Published private(set) var imported: [Skill] = []
-    @Published var lastMessage: String?
+    /// 导入/删除的结果。**必须有人渲染它**——只写不显示的话，
+    /// 「跳过了 N 个格式不对的」就等于被静默吞掉，而注释里还写着不会吞。
+    @Published private(set) var lastMessage: String?
+    private var messageClearTask: Task<Void, Never>?
 
     static let directory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -93,6 +100,9 @@ final class SkillStore: ObservableObject {
     @discardableResult
     func importSkills(from urls: [URL]) -> Int {
         var ok = 0, bad = 0
+        // 两个不同的 id 经过净化可能撞成同一个（"a/b" 和 "a-b" 都会变成 "a-b"），
+        // 后写的会盖掉先写的。不去重的话 ok 计数会虚报成功条数。
+        var writtenIDs = Set<String>()
         for url in urls {
             guard let data = try? Data(contentsOf: url) else { bad += 1; continue }
             // 单个技能或一个技能数组都收
@@ -107,14 +117,20 @@ final class SkillStore: ObservableObject {
             }
             for candidate in candidates {
                 guard let skill = Skill.validated(candidate) else { bad += 1; continue }
-                if save(skill) { ok += 1 } else { bad += 1 }
+                guard !writtenIDs.contains(skill.id) else { bad += 1; continue }
+                if save(skill) {
+                    writtenIDs.insert(skill.id)
+                    ok += 1
+                } else {
+                    bad += 1
+                }
             }
         }
         reload()
-        lastMessage = bad == 0
+        announce(bad == 0
             ? L10n.s("已导入 \(ok) 个技能", "Imported \(ok) skill(s)")
-            : L10n.s("已导入 \(ok) 个技能，\(bad) 个被跳过（字段缺失或格式不对）",
-                     "Imported \(ok) skill(s); skipped \(bad) (missing fields or bad format)")
+            : L10n.s("已导入 \(ok) 个技能，\(bad) 个被跳过（字段缺失、id 冲突或格式不对）",
+                     "Imported \(ok) skill(s); skipped \(bad) (missing fields, id clash, or bad format)"))
         return ok
     }
 
@@ -139,8 +155,19 @@ final class SkillStore: ObservableObject {
         // 删自己写的技能文件，进废纸篓而不是抹掉——和本应用其他删除路径保持一致。
         try? FileManager.default.trashItem(at: url, resultingItemURL: nil)
         reload()
-        lastMessage = L10n.s("已移除技能「\(skill.name)」（在废纸篓里）",
-                             "Removed “\(skill.name)” (it's in the Trash)")
+        announce(L10n.s("已移除技能「\(skill.name)」（在废纸篓里）",
+                        "Removed “\(skill.name)” (it's in the Trash)"))
+    }
+
+    /// 报一条结果，几秒后自己收走——它是操作反馈，不是需要用户去关的状态。
+    private func announce(_ text: String) {
+        lastMessage = text
+        messageClearTask?.cancel()
+        messageClearTask = Task { [weak self] in
+            try? await Task.sleep(nanoseconds: 6_000_000_000)
+            guard !Task.isCancelled else { return }
+            self?.lastMessage = nil
+        }
     }
 
     func revealDirectory() {

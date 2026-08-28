@@ -4,6 +4,9 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let model = MonitorModel()
     let store = SettingsStore()
+    /// 主窗口和菜单栏 HUD 共用同一个实例。曾经 HUD 用的是 DiskModel.sharedForHUD——
+    /// 另一份只被 refreshFreeBytes() 碰过的对象，于是两处「土库/可用空间」会给出不同的数。
+    @MainActor let disk = DiskModel()
     var window: NSWindow?
     var statusItem: NSStatusItem?
     var hudPopover: NSPopover?
@@ -26,11 +29,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         win.title = L10n.s("MacPulse AI — 五气朝元", "MacPulse AI — Five Elements")
         win.titlebarAppearsTransparent = true
         win.titleVisibility = .hidden
-        win.isMovableByWindowBackground = true
+        // 不要开 isMovableByWindowBackground：星轨那一片在 AppKit 眼里是「背景」，
+        // 用户想横向拖着转轨，结果拖动的是整个窗口。标题栏区域照样能拖窗口。
+        win.isMovableByWindowBackground = false
         win.isOpaque = true
         win.backgroundColor = NSColor(calibratedRed: 0.949, green: 0.957, blue: 0.965, alpha: 1)
         win.minSize = NSSize(width: 1100, height: 740)
-        win.contentView = NSHostingView(rootView: AppView(model: model, store: store))
+        win.contentView = NSHostingView(rootView: AppView(model: model, store: store, disk: disk))
         win.center()
         win.setFrameAutosaveName("MacPulseMain")
         win.makeKeyAndOrderFront(nil)
@@ -140,7 +145,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         popover.animates = true
         popover.appearance = NSAppearance(named: .aqua)
         let hud = MenuHUDView(model: model,
-                              disk: DiskModel.sharedForHUD,
+                              disk: disk,
                               onOpenMainWindow: { [weak self] in
                                   self?.hudPopover?.performClose(nil)
                                   self?.showMainWindow()

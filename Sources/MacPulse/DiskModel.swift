@@ -5,7 +5,6 @@ import Combine
 @MainActor
 final class DiskModel: ObservableObject {
     /// 菜单栏 HUD 使用的共享实例（与主窗口各自实例，避免耦合其扫描状态）。
-    static let sharedForHUD = DiskModel()
 
     @Published private(set) var items: [DiskCleaner.Item] = []
     @Published private(set) var isScanning = false

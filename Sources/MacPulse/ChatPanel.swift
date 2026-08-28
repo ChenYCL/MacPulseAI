@@ -34,7 +34,7 @@ struct ChatPanel: View {
     /// Pin 常驻：开启后所有标签页显示、重启保持。
     var pinned: Bool = false
     var onTogglePin: (() -> Void)? = nil
-    var tint: Color = Color(red: 0.62, green: 0.42, blue: 0.95)
+    var tint: Color = Studio.accent
     @State private var dragStartWidth: CGFloat?
     @State private var handleHovering = false
     @State private var isDragging = false
@@ -264,6 +264,7 @@ struct ChatPanel: View {
                     }
                     .buttonStyle(.plain)
                     .padding(.bottom, 8)
+                    .accessibilityLabel(L10n.s("跳到最新", "Jump to latest"))
                     .help(L10n.s("你已离开底部；点此回到最新回复", "You scrolled away — click to follow the latest reply"))
                 }
             }

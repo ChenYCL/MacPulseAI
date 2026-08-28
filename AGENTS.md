@@ -52,6 +52,11 @@ ChatSession / LLMClient / AgentAction / ShellGuard / SafetyGuard   AI 与安全�
 | 排序/过滤写在 `AppView.body` | 任一 `@Published` 变化都重排上千个进程 | 拆成 `Equatable` 子视图（见 `ProcessTable`） |
 | 直接把原图喂给小尺寸视图 | 每帧重采样 900px 大图 | `MythAsset.image(_:fitting:)` 桶缓存降采样副本 |
 | 不看页面就全速采样 | 每 2s fork 一次 `ps` | 表格不在屏幕上时降频（`setProcessDetailNeeded`） |
+| `L10n.s` 里每次 `Locale.preferredLanguages` | 它遍布每一个标签，是全 UI 的热路径 | 缓存自动检测结果（改系统语言需重启，手动切换立即生效） |
+
+**别手搓 `NSBitmapImageRep` 去替 `lockFocus`。** 看起来是「精确控制像素数」的优化，
+实测把空闲 CPU 从 ~10% 推到 ~40%——那条路径产出的图 SwiftUI 每次合成都要重新光栅化。
+`lockFocus` 会按屏幕 backingScale 出 2x 位图，所以目标尺寸按**点**给就行，不要自己再乘一次 2。
 
 **改完 UI 一定要量**：`top -pid <pid> -l 8 -s 1 -stats cpu`。目标是空闲 0–1%，采样瞬时 ≤5%。
 注意 `ps -o %cpu` 是衰减均值，刚启动时虚高，别拿它下结论。
@@ -171,6 +176,10 @@ swift scripts/cutout.swift      # 从 art/hero-*.jpg 重新生成去背立绘
 - 半透明卡片叠在一起会把后面那张的文字透到前面来。要「融进场景」用柔和描边和接地投影，不要用透明度。
 - 程序化创建的 `NSApplication` 没有主菜单，`⌘C/⌘V` 会失效——`setupMainMenu()` 是必需的，别删。
 - `NSStatusItem` 左键弹 HUD、右键弹菜单：不要挂 `item.menu`，否则左键会被菜单抢走。
+- `isMovableByWindowBackground = true` 会让 AppKit 把「背景」上的拖拽吃掉去挪窗口，
+  星轨的横向拖拽转轨就会变成拖窗口。标题栏区域本来就能拖，这个开关不要开。
+- 星轨角度取负（`π/2 - …`）：下一界要出现在**右边**，跟顶栏标签顺序一致。
+  写成正的话按「›」是把左边那只拉进来，方向是反的。
 - SSE 的 `finalize()` **必须先判 stopReason 再判有没有正文**。写成 `if !text.isEmpty { return text }`
   打头的话，只要模型吐过一个字，截断判定和流中错误判定就永远够不着——被 max_tokens 砍在半句的
   回答会被当成完整答案交出去，不报错也不重试。已有回归测试

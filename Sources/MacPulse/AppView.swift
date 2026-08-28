@@ -16,7 +16,8 @@ struct AppView: View {
     @AppStorage("chatPanelWidth") private var chatPanelWidth: Double = 460
     /// Pin 常驻：开启后 AI 对话面板在所有标签页显示，且重启后保持打开。
     @AppStorage("aiPanelPinned") private var aiPanelPinned = false
-    @StateObject private var disk = DiskModel()
+    /// 由 AppDelegate 持有并注入：菜单栏 HUD 要显示同一份磁盘读数。
+    @ObservedObject var disk: DiskModel
     @StateObject private var uninstallModel = UninstallModel()
     /// 当前工作页；nil = 停在选择台。
     @State private var activePane: Pane?
@@ -97,12 +98,14 @@ struct AppView: View {
                 CardStat(label: L10n.s("可清", "JUNK"), value: AppMemoryFormatter.gigabytes(disk.totalCleanableBytes), ratio: min(1, gb / 4)),
                 CardStat(label: L10n.s("项数", "ITEMS"), value: "\(disk.items.count)"),
                 CardStat(label: L10n.s("剩余", "FREE"), value: disk.freeBytesText),
-                CardStat(label: L10n.s("扫描", "SCAN"), value: disk.isScanning ? L10n.s("进行中", "LIVE") : L10n.s("就绪", "READY"))
+                CardStat(label: L10n.s("扫描", "SCAN"), value: Self.scanState(isScanning: disk.isScanning,
+                                                                             hasResult: disk.lastScanDate != nil))
             ]
         case .software:
             return [
                 CardStat(label: L10n.s("应用", "APPS"), value: "\(uninstallModel.rows.count)"),
-                CardStat(label: L10n.s("扫描", "SCAN"), value: uninstallModel.isScanning ? L10n.s("进行中", "LIVE") : L10n.s("就绪", "READY")),
+                CardStat(label: L10n.s("扫描", "SCAN"), value: Self.scanState(isScanning: uninstallModel.isScanning,
+                                                                             hasResult: !uninstallModel.rows.isEmpty)),
                 CardStat(label: L10n.s("选定", "PICK"), value: uninstallModel.selectedRowID == nil ? "—" : "1"),
                 CardStat(label: L10n.s("处置", "ACT"), value: L10n.s("废纸篓", "TRASH"))
             ]
@@ -117,7 +120,8 @@ struct AppView: View {
             return [
                 CardStat(label: L10n.s("条目", "ROWS"), value: "\(analyzeModel.entries.count)"),
                 CardStat(label: L10n.s("合计", "TOTAL"), value: AppMemoryFormatter.gigabytes(analyzeModel.totalBytes)),
-                CardStat(label: L10n.s("扫描", "SCAN"), value: analyzeModel.isScanning ? L10n.s("进行中", "LIVE") : L10n.s("就绪", "READY")),
+                CardStat(label: L10n.s("扫描", "SCAN"), value: Self.scanState(isScanning: analyzeModel.isScanning,
+                                                                             hasResult: !analyzeModel.entries.isEmpty)),
                 CardStat(label: L10n.s("路径", "PATH"), value: L10n.s("家目录", "HOME"))
             ]
         case .security:
@@ -236,28 +240,6 @@ struct AppView: View {
         Set(chat.flaggedActions.compactMap(\.pid))
     }
 
-    /// 排序：AI 建议终止的进程强制置顶；同组内沿用用户选择的列排序。
-    private var sortedByFlagThenOrder: ([ProcSample], [ProcSample]) {
-        let sorted = model.processes.sorted(using: sortOrder)
-        return ChatSession.prioritySplit(sorted, flaggedPIDs: flaggedPIDs)
-    }
-
-    private var filteredProcesses: [ProcSample] {
-        let q = searchText.trimmingCharacters(in: .whitespaces)
-        let (top, rest) = sortedByFlagThenOrder
-
-        func filter(_ list: [ProcSample]) -> [ProcSample] {
-            guard !q.isEmpty else { return list }
-            return list.filter {
-                $0.name.localizedCaseInsensitiveContains(q)
-                    || $0.path.localizedCaseInsensitiveContains(q)
-                    || String($0.pid).contains(q)
-            }
-        }
-
-        return filter(top) + filter(rest)
-    }
-
     var body: some View {
         ZStack {
             StudioBackdrop(theme: currentTheme,
@@ -337,6 +319,7 @@ struct AppView: View {
                      onRunSkill: { runSkill($0) },
                      onRemoveSkill: { skillStore.remove($0) },
                      onImportSkills: { skillStore.importSkills(from: $0) },
+                     skillMessage: skillStore.lastMessage,
                      onEnter: { enter(previewPane) },
                      onAnalyze: { runAnalysis() },
                      onSettings: { showSettings = true },
@@ -487,6 +470,13 @@ struct AppView: View {
     }
 
     // MARK: 工具
+
+    /// 「就绪」只能用来形容扫过一遍之后的状态。还没扫过就写「0 项 · 就绪」，
+    /// 读起来是「扫过了，什么都没有」——那是在报一个没做过的结论。
+    static func scanState(isScanning: Bool, hasResult: Bool) -> String {
+        if isScanning { return L10n.s("进行中", "Live") }
+        return hasResult ? L10n.s("就绪", "Ready") : L10n.s("未扫描", "Not scanned")
+    }
 
     static func memoryString(_ bytes: Int64) -> String {
         let mb = Double(bytes) / 1_048_576

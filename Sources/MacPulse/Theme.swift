@@ -88,7 +88,6 @@ enum WuXingTheme {
         let element: String        // 行字（金/木/水/火/土/門）
         let beast: String          // 神兽名
         let beastEn: String
-        let slogan: String
         let primary: Color         // 可读行色：圆点 / 细条 / 小标签
         let secondary: Color       // 渐变亮端
         let glow: Color            // 立绘接地辉光
@@ -98,11 +97,27 @@ enum WuXingTheme {
         var cutoutName: String { "char-\(assetName)" }
     }
 
+    /// 主题查表：`theme(for:)` 在一次 body 里会被调十几次（顶栏、背景、卡面、底栏…），
+    /// 每次都新建 5 个 Color 加一次 L10n.s 拼串。缓存住，只在语言切换时重建。
+    private static var cache: [String: Theme] = [:]
+    private static var cachedLanguage: String = ""
+
     static func theme(for pane: AppViewPane) -> Theme {
+        let lang = L10n.current.rawValue
+        if cachedLanguage != lang {
+            cache.removeAll()
+            cachedLanguage = lang
+        }
+        if let hit = cache[pane.rawValue] { return hit }
+        let built = build(pane)
+        cache[pane.rawValue] = built
+        return built
+    }
+
+    private static func build(_ pane: AppViewPane) -> Theme {
         switch pane {
         case .status:
             return Theme(element: "火", beast: "朱雀", beastEn: "Vermilion Bird",
-                         slogan: L10n.s("朱雀观火 · 实时监看系统温度与负荷", "Vermilion Bird watches the fire — live load"),
                          primary: Studio.hex(0xDD5527),
                          secondary: Studio.hex(0xF6A62A),
                          glow: Studio.hex(0xFF7A3C),
@@ -110,7 +125,6 @@ enum WuXingTheme {
                          assetName: "fire")
         case .clean:
             return Theme(element: "金", beast: "白虎", beastEn: "White Tiger",
-                         slogan: L10n.s("白虎肃杀 · 斩除冗余缓存", "White Tiger purges the redundant"),
                          primary: Studio.hex(0x9C7F45),
                          secondary: Studio.hex(0xD8C7A8),
                          glow: Studio.hex(0xC9B489),
@@ -118,7 +132,6 @@ enum WuXingTheme {
                          assetName: "metal")
         case .software:
             return Theme(element: "木", beast: "青龙", beastEn: "Azure Dragon",
-                         slogan: L10n.s("青龙生长 · 管理应用与自启", "Azure Dragon tends the growing apps"),
                          primary: Studio.hex(0x1B8B6D),
                          secondary: Studio.hex(0x5CD89E),
                          glow: Studio.hex(0x3FBF8C),
@@ -126,7 +139,6 @@ enum WuXingTheme {
                          assetName: "wood")
         case .optimize:
             return Theme(element: "土", beast: "麒麟", beastEn: "Qilin",
-                         slogan: L10n.s("麒麟厚德 · 修缮系统根基", "Qilin repairs the foundation"),
                          primary: Studio.hex(0xAC7A31),
                          secondary: Studio.hex(0xF0C97A),
                          glow: Studio.hex(0xD9A455),
@@ -134,7 +146,6 @@ enum WuXingTheme {
                          assetName: "earth")
         case .analyze:
             return Theme(element: "水", beast: "玄武", beastEn: "Black Tortoise",
-                         slogan: L10n.s("玄武测渊 · 丈量磁盘深处的去向", "Black Tortoise fathoms the disk"),
                          primary: Studio.hex(0x2C6DC7),
                          secondary: Studio.hex(0x4FB8E5),
                          glow: Studio.hex(0x4A8FE8),
@@ -142,7 +153,6 @@ enum WuXingTheme {
                          assetName: "water")
         case .security:
             return Theme(element: "門", beast: "门神", beastEn: "Door Gods",
-                         slogan: L10n.s("神荼郁垒 · 把守系统门阙", "Shen Tu & Yu Lei guard the gate"),
                          primary: Studio.hex(0xBB3A2E),
                          secondary: Studio.hex(0xF27348),
                          glow: Studio.hex(0xE05A46),
@@ -151,30 +161,8 @@ enum WuXingTheme {
         }
     }
 
-    /// 品牌印记：小圆头像 + 神兽名。顶栏与 HUD 共用。
-    struct SealEmblem: View {
-        let theme: Theme
-        var size: CGFloat = 30
-
-        var body: some View {
-            HStack(spacing: 8) {
-                BeastAvatar(theme: theme, size: size)
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(theme.beast)
-                        .font(.system(size: size * 0.40, weight: .semibold))
-                        .foregroundColor(Studio.ink)
-                    Text(theme.beastEn.uppercased())
-                        .font(Studio.microLabel(size * 0.22))
-                        .foregroundColor(Studio.inkTertiary)
-                        .tracking(1.0)
-                }
-            }
-        }
-    }
 }
 
-/// 兼容旧调用点。
-typealias SealEmblem = WuXingTheme.SealEmblem
 
 /// 神兽圆头像：优先用圆形徽章原画（本来就是照圆构图画的），
 /// 缺失时退回去背立绘塞进浅色圆底。
@@ -420,51 +408,6 @@ struct SkillChip: View {
                 Button(L10n.s("移除技能", "Remove skill"), role: .destructive, action: onRemove)
             } else {
                 Text(L10n.s("内置技能", "Built-in skill"))
-            }
-        }
-    }
-}
-
-/// 键值读数：小标 + 数值，可选细进度条。卡片属性行与顶栏读数共用。
-struct StatReadout: View, Equatable {
-    let label: String
-    let value: String
-    var ratio: Double? = nil
-    var tint: Color = Studio.accent
-    var compact: Bool = false
-
-    static func == (lhs: StatReadout, rhs: StatReadout) -> Bool {
-        lhs.label == rhs.label && lhs.value == rhs.value
-            && lhs.ratio == rhs.ratio && lhs.compact == rhs.compact
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            HStack(spacing: 6) {
-                Text(label.uppercased())
-                    .font(Studio.microLabel(compact ? 8.5 : 9))
-                    .tracking(1.0)
-                    .foregroundColor(Studio.inkTertiary)
-                Spacer(minLength: 4)
-                Text(value)
-                    .font(Studio.value(compact ? 10.5 : 12))
-                    .foregroundColor(Studio.ink)
-                    .lineLimit(1)
-            }
-            if let ratio {
-                Capsule()
-                    .fill(Studio.surfaceSunken)
-                    .frame(height: 3)
-                    .overlay(alignment: .leading) {
-                        GeometryReader { geo in
-                            // ratio 为 0 时不画那一小截「最小宽度」——
-                            // 它看起来像个脏点，而不是「这里是 0」。
-                            let w = geo.size.width * CGFloat(min(1, max(0, ratio)))
-                            if w >= 1 {
-                                Capsule().fill(tint).frame(width: max(3, w))
-                            }
-                        }
-                    }
             }
         }
     }

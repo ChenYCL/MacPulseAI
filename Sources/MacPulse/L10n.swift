@@ -24,12 +24,21 @@ enum L10n {
     /// 单测强制语言。
     static var forced: Lang?
 
+    /// 自动检测的结果缓存。`L10n.s` 遍布每一个标签，而 detect() 每次都要
+    /// 读一遍 Locale.preferredLanguages 并建数组——在「跟随系统」模式下这是全 UI 的热路径。
+    /// 代价是系统语言改了要重启 app 才生效；手动切换（overrideCode）不走这条路，立即生效。
+    private static var cachedAuto: Lang?
+
     static var current: Lang {
         if let forced { return forced }
         switch overrideCode {
         case "zh": return .zh
         case "en": return .en
-        default: return Lang.detect()
+        default:
+            if let cachedAuto { return cachedAuto }
+            let detected = Lang.detect()
+            cachedAuto = detected
+            return detected
         }
     }
 

@@ -35,8 +35,14 @@ enum MythAsset {
     /// 这里按 128pt 一档做桶缓存，同一档只解码缩放一次。
     static func image(_ name: String, fitting points: CGFloat) -> NSImage? {
         guard let base = image(name) else { return nil }
-        let bucket = max(128, (ceil(points / 128) * 128))
-        let target = bucket * 2                       // Retina
+        // bucket 是「点」，不是像素：下面用 lockFocus 绘制，AppKit 会按当前屏幕的
+        // backingScaleFactor 自动出 2x 位图。这里再乘一次 2 就是四倍于需要的像素。
+        //
+        // 试过改用手搓 NSBitmapImageRep 来精确控制像素数——实测反而把空闲 CPU 从
+        // ~10% 推到 ~40%（那条路径产出的图 SwiftUI 每次合成都要重新光栅化）。
+        // 保留 lockFocus，只把重复的 2x 去掉。
+        let target = max(128, (ceil(points / 128) * 128))
+        let bucket = target
         guard max(base.size.width, base.size.height) > target else { return base }
 
         let key = "\(name)@\(Int(bucket))"
@@ -286,6 +292,8 @@ struct RealmPicker: View {
                     }
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel("\(theme.beast) · \(pane.title)")
+                .accessibilityAddTraits(active ? [.isSelected] : [])
                 .help("\(theme.beast) · \(pane.title)")
             }
         }
