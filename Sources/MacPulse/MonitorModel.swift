@@ -6,6 +6,9 @@ import Combine
 final class MonitorModel: ObservableObject {
     @Published private(set) var processes: [ProcSample] = []
     @Published private(set) var load: SystemLoad = .zero
+    /// 最近若干次采样的总负载，给背景的实时波形用。
+    /// 只在窗口可见时累积——遮挡时画不出来，攒了也是白攒。
+    @Published private(set) var loadHistory: [Double] = []
     @Published private(set) var statusMessage: String?
     @Published var isPaused = false
     @Published var refreshInterval: Double = 2 {
@@ -15,6 +18,8 @@ final class MonitorModel: ObservableObject {
     }
 
     let coreCount = ProcessInfo.processInfo.activeProcessorCount
+    /// 波形保留的采样点数：2 秒一拍时约等于最近 3 分钟。
+    static let historyLimit = 90
     var onLoadUpdate: ((SystemLoad) -> Void)?
 
     private let sampler: ProcessSampler
@@ -73,6 +78,10 @@ final class MonitorModel: ObservableObject {
         if isWindowVisible {
             let snapped = l.snapped()
             if snapped != load { load = snapped }
+            loadHistory.append(min(100, max(0, l.totalPercent)))
+            if loadHistory.count > Self.historyLimit {
+                loadHistory.removeFirst(loadHistory.count - Self.historyLimit)
+            }
             refreshMemoryStats()
         }
 

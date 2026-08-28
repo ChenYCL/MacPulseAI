@@ -100,12 +100,19 @@ enum MythAsset {
     }
 }
 
-/// 影棚背景：无缝背景纸。上白下灰的竖向渐变 + 主体区一团柔光 + 极淡暗角。
-/// 不画地平线——参考里地面和背景是连着的一张纸，硬线只会把画面切断。
+/// 影棚背景：无缝背景纸 + 一层极淡的实时遥测。
+///
+/// 遥测层画的是真数据（负载波形、内存环、进程密度），但刻意压到看不太清——
+/// 它是气氛，不是仪表盘；真要读数值有顶栏和状态页。所以这里没有任何标签和刻度，
+/// 只有「这台机器现在在动」这一个信息。
 struct StudioBackdrop: View {
     let theme: WuXingTheme.Theme
+    /// 负载历史（0–100），最后一个是最新。
+    var loadHistory: [Double] = []
+    var memoryRatio: Double? = nil
+    var processCount: Int = 0
     /// 柔光中心（单位坐标），角色站哪儿光就打哪儿。
-    var lightCenter: UnitPoint = UnitPoint(x: 0.66, y: 0.44)
+    var lightCenter: UnitPoint = UnitPoint(x: 0.5, y: 0.40)
     var dust: Bool = true
 
     var body: some View {
@@ -129,6 +136,11 @@ struct StudioBackdrop: View {
                     ],
                     center: lightCenter, startRadius: 0, endRadius: d * 0.55)
 
+                TelemetryLayer(theme: theme,
+                               history: loadHistory,
+                               memoryRatio: memoryRatio,
+                               processCount: processCount)
+
                 // 暗角：把视线收回画面中央。
                 RadialGradient(
                     stops: [
@@ -143,6 +155,96 @@ struct StudioBackdrop: View {
             }
         }
         .allowsHitTesting(false)
+    }
+}
+
+/// 实时遥测底纹：底部负载波形 + 中心内存环 + 按进程数疏密的刻度点。
+/// 整层用一个 Canvas 画完，2 秒一拍随数据重绘，不做逐帧动画。
+struct TelemetryLayer: View, Equatable {
+    let theme: WuXingTheme.Theme
+    let history: [Double]
+    let memoryRatio: Double?
+    let processCount: Int
+
+    static func == (lhs: TelemetryLayer, rhs: TelemetryLayer) -> Bool {
+        lhs.theme.assetName == rhs.theme.assetName
+            && lhs.history == rhs.history
+            && lhs.memoryRatio == rhs.memoryRatio
+            && lhs.processCount == rhs.processCount
+    }
+
+    var body: some View {
+        Canvas { ctx, size in
+            drawLoadRibbon(ctx: &ctx, size: size)
+            drawMemoryArc(ctx: &ctx, size: size)
+            drawProcessTicks(ctx: &ctx, size: size)
+        }
+        .drawingGroup()
+        .allowsHitTesting(false)
+    }
+
+    /// 底部负载波形：铺满整幅宽度的面积图，压到几乎只剩一层影子。
+    private func drawLoadRibbon(ctx: inout GraphicsContext, size: CGSize) {
+        guard history.count >= 2 else { return }
+        let baseY = size.height
+        let bandH = size.height * 0.22
+        let step = size.width / CGFloat(max(1, history.count - 1))
+
+        var area = Path()
+        area.move(to: CGPoint(x: 0, y: baseY))
+        for (i, v) in history.enumerated() {
+            let x = CGFloat(i) * step
+            let y = baseY - bandH * CGFloat(min(1, max(0, v / 100)))
+            area.addLine(to: CGPoint(x: x, y: y))
+        }
+        area.addLine(to: CGPoint(x: size.width, y: baseY))
+        area.closeSubpath()
+
+        ctx.fill(area, with: .linearGradient(
+            Gradient(colors: [theme.primary.opacity(0.10), theme.primary.opacity(0.0)]),
+            startPoint: CGPoint(x: 0, y: baseY - bandH),
+            endPoint: CGPoint(x: 0, y: baseY)))
+
+        var line = Path()
+        for (i, v) in history.enumerated() {
+            let x = CGFloat(i) * step
+            let y = baseY - bandH * CGFloat(min(1, max(0, v / 100)))
+            if i == 0 { line.move(to: CGPoint(x: x, y: y)) } else { line.addLine(to: CGPoint(x: x, y: y)) }
+        }
+        ctx.stroke(line, with: .color(theme.primary.opacity(0.16)), lineWidth: 1.2)
+    }
+
+    /// 内存环：立绘身后一圈开口的弧，占用越高弧越长。压得比背景纸只深一点点。
+    private func drawMemoryArc(ctx: inout GraphicsContext, size: CGSize) {
+        guard let ratio = memoryRatio else { return }
+        let center = CGPoint(x: size.width * 0.5, y: size.height * 0.38)
+        let r = min(size.width, size.height) * 0.21
+
+        var track = Path()
+        track.addArc(center: center, radius: r, startAngle: .degrees(130),
+                     endAngle: .degrees(410), clockwise: false)
+        ctx.stroke(track, with: .color(Studio.hex(0x8A93A2, 0.045)), lineWidth: 1.2)
+
+        var arc = Path()
+        arc.addArc(center: center, radius: r, startAngle: .degrees(130),
+                   endAngle: .degrees(130 + 280 * min(1, max(0, ratio))), clockwise: false)
+        ctx.stroke(arc, with: .color(theme.primary.opacity(0.09)),
+                   style: StrokeStyle(lineWidth: 1.6, lineCap: .round))
+    }
+
+    /// 进程密度：沿外圈打一圈小点，进程越多点越密。纯氛围，不表示具体数值。
+    private func drawProcessTicks(ctx: inout GraphicsContext, size: CGSize) {
+        guard processCount > 0 else { return }
+        let center = CGPoint(x: size.width * 0.5, y: size.height * 0.38)
+        let r = min(size.width, size.height) * 0.26
+        let ticks = min(72, max(12, processCount / 16))
+        for i in 0..<ticks {
+            let a = Double(i) / Double(ticks) * 2 * .pi - .pi / 2
+            let p = CGPoint(x: center.x + CGFloat(cos(a)) * r,
+                            y: center.y + CGFloat(sin(a)) * r)
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 1, y: p.y - 1, width: 2, height: 2)),
+                     with: .color(Studio.hex(0x8A93A2, 0.09)))
+        }
     }
 }
 

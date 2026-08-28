@@ -1,0 +1,8 @@
+{
+  "id": "port-exposure-audit",
+  "name": "端口暴露面",
+  "detail": "逐个监听端口判断是否该对局域网开放",
+  "icon": "network.badge.shield.half.filled",
+  "pane": "security",
+  "prompt": "逐个检查当前监听端口：绑在 127.0.0.1 还是 0.0.0.0、属于哪个进程、有没有必要对局域网开放。把应该收回本地的挑出来，并说明收回的具体做法。不确定的直接标注不确定。"
+}

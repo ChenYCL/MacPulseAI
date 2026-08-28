@@ -2,8 +2,13 @@ import SwiftUI
 
 /// 安全中心：剪贴板安全体检 + AI 查毒 + SafetyGuard 审计日志。
 struct SecurityView: View {
+    /// 外部深链：选择台的装备槽要能直接落到某个分段 / 触发某次体检。
+    enum Request: Equatable { case showPorts, recheckClipboard }
+
     @ObservedObject var chat: ChatSession
     let monitor: MonitorModel
+    /// 消费一次即清空，避免回到本页时重复触发。
+    @Binding var request: Request?
     let configProvider: () -> LLMConfig?
     let onAnalyze: () -> Void
     let onOpenChat: () -> Void
@@ -76,6 +81,14 @@ struct SecurityView: View {
             }
         }
         .onAppear { if lastCheck == nil { refresh() } }
+        .onChange(of: request) { pending in
+            guard let pending else { return }
+            switch pending {
+            case .showPorts: segment = .ports
+            case .recheckClipboard: segment = .audit; refresh()
+            }
+            request = nil          // 消费掉，回到本页时不重复触发
+        }
         .onReceive(NotificationCenter.default.publisher(for: SafetyGuard.JournalChanged.name)) { _ in
             journal = SafetyGuard.journal
         }

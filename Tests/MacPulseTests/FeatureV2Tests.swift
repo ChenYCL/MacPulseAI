@@ -403,8 +403,9 @@ final class FeatureV2Tests: XCTestCase {
         _ = StudioPanel { Text("x") }
         _ = StudioBackdrop(theme: theme)
         _ = BeastAvatar(theme: theme)
-        _ = RosterCard(theme: theme, paneTitle: "状态",
-                       stats: [CardStat(label: "CPU", value: "12%", ratio: 0.12)], selected: true)
+        _ = RosterScreen(selection: .constant(.status))
+        _ = BeastFigure(theme: theme, size: 200, isFront: true)
+        _ = OrbitRing(theme: theme, rx: 300, ry: 40)
         XCTAssertEqual(theme.assetName, "fire")
         XCTAssertEqual(theme.cutoutName, "char-fire")
     }

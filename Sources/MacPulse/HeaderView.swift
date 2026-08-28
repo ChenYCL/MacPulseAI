@@ -114,26 +114,39 @@ struct TopNavBar: View {
         .help(help)
     }
 
-    // MARK: 右侧读数与开关
+    // MARK: 右侧读数与开关（一个整体，不是四颗散落的药丸）
 
     private var trailing: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 0) {
             readout(L10n.s("负载", "CPU"),
                     String(format: "%.0f%%", stat.total),
                     tint: stat.total >= 80 ? Studio.danger : (stat.total >= 50 ? Studio.warning : Studio.success))
+            groupDivider
             readout(L10n.s("内存", "MEM"),
                     memPercent.map { String(format: "%.0f%%", $0) } ?? "--",
                     tint: (memPercent ?? 0) >= 85 ? Studio.danger : Studio.accent)
+            groupDivider
             iconButton(isPaused ? "play.fill" : "pause.fill",
                        help: isPaused ? L10n.s("继续刷新", "Resume") : L10n.s("暂停刷新", "Pause"),
                        action: onPause)
             iconButton("gearshape", help: L10n.s("设置", "Settings"), action: onSettings)
         }
+        .padding(.horizontal, 4)
+        .frame(height: 34)
+        .background(Capsule(style: .continuous).fill(Studio.surface.opacity(0.92)))
+        .overlay(Capsule(style: .continuous).strokeBorder(Studio.hairline, lineWidth: 1))
+        .shadow(color: Studio.shadowSoft, radius: 8, y: 2)
         .fixedSize()
     }
 
+    private var groupDivider: some View {
+        Rectangle().fill(Studio.hairline)
+            .frame(width: 1, height: 15)
+            .padding(.horizontal, 3)
+    }
+
     private func readout(_ label: String, _ value: String, tint: Color) -> some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             Circle().fill(tint).frame(width: 6, height: 6)
             Text(label.uppercased())
                 .font(Studio.microLabel(9))
@@ -143,21 +156,17 @@ struct TopNavBar: View {
                 .font(Studio.value(12))
                 .foregroundColor(Studio.ink)
         }
-        .padding(.horizontal, 11)
-        .frame(height: 28)
-        .background(Capsule(style: .continuous).fill(Studio.surface.opacity(0.9)))
-        .overlay(Capsule(style: .continuous).strokeBorder(Studio.hairline, lineWidth: 1))
+        .padding(.horizontal, 8)
     }
 
     private func iconButton(_ systemImage: String, help: String,
                             action: @escaping () -> Void) -> some View {
         Button(action: action) {
             Image(systemName: systemImage)
-                .font(.system(size: 12, weight: .medium))
+                .font(.system(size: 11.5, weight: .medium))
                 .foregroundColor(Studio.inkSecondary)
-                .frame(width: 28, height: 28)
-                .background(Circle().fill(Studio.surface.opacity(0.9)))
-                .overlay(Circle().strokeBorder(Studio.hairline, lineWidth: 1))
+                .frame(width: 26, height: 26)
+                .contentShape(Circle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel(help)

@@ -380,27 +380,48 @@ struct SlotButton: View {
     }
 }
 
-/// 圆形能力点：参考里 SKILL TREE 的两排圆点，这里代表本模块具备的能力。
-struct SkillDot: View {
-    let icon: String
-    let title: String
+/// 技能胶囊：一个**真按钮**。点它 = 把这段提示词连同本界上下文交给 AI。
+/// 之所以带上文字而不是只留一个圆图标，是因为只有图标的东西看起来像装饰；
+/// 能点的就要写清楚点了会发生什么。
+struct SkillChip: View {
+    let skill: Skill
     var tint: Color = Studio.accent
-    var active: Bool = true
+    let onRun: () -> Void
+    /// 内置技能传 nil：没有删除入口。
+    var onRemove: (() -> Void)? = nil
 
     @State private var hovering = false
 
     var body: some View {
-        Image(systemName: icon)
-            .font(.system(size: 11, weight: .medium))
-            .foregroundColor(active ? (hovering ? tint : Studio.inkSecondary) : Studio.inkTertiary.opacity(0.6))
-            .frame(width: 28, height: 28)
-            .background(Circle().fill(active ? (hovering ? tint.opacity(0.12) : Studio.surfaceMuted)
-                                             : Studio.surfaceMuted.opacity(0.6)))
-            .overlay(Circle().strokeBorder(active ? Studio.hairline : Studio.hairline.opacity(0.6), lineWidth: 1))
-            .onHover { hovering = $0 }
-            .animation(.easeOut(duration: 0.12), value: hovering)
-            .accessibilityLabel(title)
-            .help(title)
+        Button(action: onRun) {
+            HStack(spacing: 5) {
+                Image(systemName: skill.icon)
+                    .font(.system(size: 10.5, weight: .medium))
+                Text(skill.name)
+                    .font(.system(size: 11, weight: .medium))
+                    .lineLimit(1)
+            }
+            .foregroundColor(hovering ? tint : Studio.ink)
+            .padding(.horizontal, 11)
+            .frame(height: 28)
+            .background(Capsule(style: .continuous)
+                .fill(hovering ? tint.opacity(0.10) : Studio.surface))
+            .overlay(Capsule(style: .continuous)
+                .strokeBorder(hovering ? tint.opacity(0.42) : Studio.hairline, lineWidth: 1))
+            .shadow(color: Studio.shadowSoft, radius: 3, y: 1)
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .animation(.easeOut(duration: 0.12), value: hovering)
+        .accessibilityLabel(skill.name)
+        .help(skill.detail.isEmpty ? skill.name : "\(skill.name)\n\(skill.detail)")
+        .contextMenu {
+            if let onRemove {
+                Button(L10n.s("移除技能", "Remove skill"), role: .destructive, action: onRemove)
+            } else {
+                Text(L10n.s("内置技能", "Built-in skill"))
+            }
+        }
     }
 }
 

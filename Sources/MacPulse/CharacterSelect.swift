@@ -4,7 +4,7 @@ import SwiftUI
 // MARK: - 选择台数据契约
 
 /// 卡面属性行：标签 / 数值 / 可选比例（画细条）。值类型 + Equatable，
-/// 采样数值没变时整套卡牌可以按内容跳过重绘。
+/// 采样数值没变时整块读数可以按内容跳过重绘。
 struct CardStat: Identifiable, Equatable {
     let id = UUID()
     let label: String
@@ -21,23 +21,19 @@ struct QuickSlot: Identifiable {
     let action: () -> Void
 }
 
-/// 能力点：本模块具备的能力/约束，只做说明不可点。
-struct SkillSpec: Identifiable, Equatable {
-    let id = UUID()
-    let icon: String
-    let title: String
-    var active: Bool = true
-}
-
 // MARK: - 角色选择台
 
-/// 影棚式角色选择：左封面流卡牌，右去背立绘，底部装备/能力/操作三段栏。
-/// 版式语法照抄游戏角色选择台——干净背景纸、克制的排版、只有一枚强调色。
+/// 星轨选择台：六界神兽排在一条椭圆轨道上自己转，没有卡片这层中介。
+/// 轨道最前那只放大居中（就是当前选中的界），左右两侧是相邻的两只，
+/// 点侧边的兽或按左右键，它就转到中间来。
 struct RosterScreen: View {
     @Binding var selection: AppView.Pane
     var statsFor: (AppView.Pane) -> [CardStat] = { _ in [] }
     var loadoutFor: (AppView.Pane) -> [QuickSlot] = { _ in [] }
-    var skillsFor: (AppView.Pane) -> [SkillSpec] = { _ in [] }
+    var skillsFor: (AppView.Pane) -> [Skill] = { _ in [] }
+    var onRunSkill: (Skill) -> Void = { _ in }
+    var onRemoveSkill: (Skill) -> Void = { _ in }
+    var onImportSkills: ([URL]) -> Void = { _ in }
     var onEnter: () -> Void = {}
     var onAnalyze: () -> Void = {}
     var onSettings: () -> Void = {}
@@ -53,25 +49,20 @@ struct RosterScreen: View {
     private var theme: WuXingTheme.Theme { WuXingTheme.theme(for: selection) }
 
     private var spring: Animation {
-        reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.34, dampingFraction: 0.85)
+        reduceMotion ? .easeOut(duration: 0.12) : .spring(response: 0.42, dampingFraction: 0.78)
     }
 
     var body: some View {
         GeometryReader { geo in
-            let railH: CGFloat = 90
-            let gap: CGFloat = 14
-            let stageH = max(210, geo.size.height - railH - gap)
-            // 卡组固定占左侧四成：GeometryReader 没有固有尺寸，
-            // 交给 HStack 自己分会被同样弹性的立绘台吃光。
-            let cardsW = min(560, max(320, geo.size.width * 0.44))
-            VStack(spacing: gap) {
-                HStack(alignment: .bottom, spacing: 4) {
-                    coverFlow(width: cardsW, height: stageH)
-                        .frame(width: cardsW, height: stageH)
-                    HeroStage(theme: theme)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: stageH)
-                }
+            let railH: CGFloat = 96
+            let plateH: CGFloat = 108
+            let orbitH = max(220, geo.size.height - railH - plateH - 10)
+            VStack(spacing: 0) {
+                orbitStage(width: geo.size.width, height: orbitH)
+                    .frame(width: geo.size.width, height: orbitH)
+                nameplate
+                    .frame(height: plateH)
+                Spacer(minLength: 0)
                 bottomRail
                     .frame(height: railH)
             }
@@ -86,99 +77,132 @@ struct RosterScreen: View {
         }
     }
 
-    // MARK: 封面流
+    // MARK: 星轨
 
-    private func coverFlow(width: CGFloat, height: CGFloat) -> some View {
-        // 卡面按参考稿的比例走：高度吃满台面，宽高比约 0.60，
-        // 相邻卡露出 ~70% —— 侧卡的名字和数值要能读，不能只剩一条边。
-        let cardH = min(420, max(210, height * 0.86))
-        let cardW = min(width * 0.42, cardH * 0.62)
-        let slot = cardW * 0.70
-        return ZStack(alignment: .bottom) {
+    private func orbitStage(width: CGFloat, height: CGFloat) -> some View {
+        let ry = height * 0.085
+        let rx = min(width * 0.32, 460)
+        let frontSize = min(height * 0.86, width * 0.42)
+        let baseline = height * 0.5 - frontSize * 0.5 + frontSize * 0.42
+
+        return ZStack {
+            OrbitRing(theme: theme, rx: rx, ry: ry, animated: !reduceMotion)
+                .offset(y: baseline + ry * 0.2)
+
             ForEach(Array(panes.enumerated()), id: \.offset) { i, pane in
-                flowingCard(pane, index: i, cardW: cardW, cardH: cardH, slot: slot)
+                orbitBeast(pane, index: i, frontSize: frontSize,
+                           rx: rx, ry: ry, baseline: baseline)
             }
+
+            HStack {
+                arrowButton(-1)
+                Spacer(minLength: 0)
+                arrowButton(1)
+            }
+            .padding(.horizontal, max(6, width * 0.5 - rx - frontSize * 0.30))
+            .offset(y: baseline * 0.35)
         }
-        .frame(width: width, height: height, alignment: .bottom)
-        .offset(y: -height * 0.04)
+        .frame(width: width, height: height)
         .contentShape(Rectangle())
-        .gesture(flowDrag(slotWidth: max(64, slot)))
-        // 边缘只做一小截柔化：卡组像被画布裁切，而不是整体发虚。
-        .mask(
-            LinearGradient(stops: [
-                .init(color: .clear, location: 0.00),
-                .init(color: .white, location: 0.05),
-                .init(color: .white, location: 0.95),
-                .init(color: .clear, location: 1.00)
-            ], startPoint: .leading, endPoint: .trailing)
-        )
+        .gesture(orbitDrag(slotWidth: max(90, rx * 0.6)))
         .hideFocusRing()
     }
 
-    /// 环形封面流：卡牌两侧都要有邻居，所以位移取「绕一圈里最短的那条路」。
-    /// n=6 时 delta ∈ [-3, 3]，越界的那一张在 |delta|>2.9 处已经淡到全透明，
-    /// 于是 +3 ↔ -3 的瞬移永远发生在看不见的时候。
-    private func wrappedDelta(_ index: Int) -> Double {
+    /// 轨道角：选中项落在正下方（θ=π/2），也就是离镜头最近的那一点。
+    private func orbitAngle(_ index: Int) -> Double {
         let n = Double(count)
-        var d = (Double(index) - focus).truncatingRemainder(dividingBy: n)
-        if d > n / 2 { d -= n }
-        if d < -n / 2 { d += n }
-        return d
+        return (Double(index) - focus) / n * 2 * .pi + .pi / 2
     }
 
-    private func flowingCard(_ pane: AppView.Pane, index: Int,
-                             cardW: CGFloat, cardH: CGFloat, slot: CGFloat) -> some View {
-        let delta = CGFloat(wrappedDelta(index))
-        let absD = abs(delta)
-        let isFront = absD < 0.45
-        let fade = min(1, max(0, (2.9 - Double(absD)) / 0.7))
-        // 转角在第一张邻居处就到顶：再往外继续转会把卡片压成一条边，
-        // 参考稿里的侧卡始终是能认出脸和名字的。
-        let turn = Double(max(-1.0, min(1.0, delta / 1.15))) * -24
-        return RosterCard(theme: WuXingTheme.theme(for: pane),
-                          paneTitle: pane.title,
-                          stats: statsFor(pane),
-                          selected: isFront,
-                          portraitHeight: cardH * 0.52)
-            .equatable()                                  // 转卡时只动变换，不重建卡面
-            .frame(width: cardW, height: cardH)
-            .rotation3DEffect(reduceMotion ? .zero : .degrees(turn),
-                              axis: (x: 0, y: 1, z: 0),
-                              anchor: delta < 0 ? .trailing : .leading,
-                              perspective: 0.38)
-            .scaleEffect(isFront ? 1.0 : max(0.82, 0.92 - absD * 0.04), anchor: .bottom)
-            .offset(x: delta * slot, y: isFront ? -18 : 0)
-            .brightness(isFront ? 0 : -0.015)
-            .opacity(fade)
-            .zIndex(20 - Double(absD))
+    private func orbitBeast(_ pane: AppView.Pane, index: Int, frontSize: CGFloat,
+                            rx: CGFloat, ry: CGFloat, baseline: CGFloat) -> some View {
+        let t = WuXingTheme.theme(for: pane)
+        let theta = orbitAngle(index)
+        let depth = sin(theta)                       // +1 最前，-1 最后
+        let d = (depth + 1) / 2
+        let isFront = depth > 0.9
+        // 前后差距拉得很开：最前那只是主角，最后那只只是轨道上的一个影子。
+        let size = frontSize * (0.30 + 0.70 * pow(d, 1.6))
+        let opacity = 0.16 + 0.84 * pow(d, 1.9)
+        let blur = (1 - d) * 3.5                     // 景深：越靠后越虚
+
+        return BeastFigure(theme: t, size: size, isFront: isFront,
+                           animated: !reduceMotion)
+            .blur(radius: blur)
+            .opacity(opacity)
+            .offset(x: CGFloat(cos(theta)) * rx,
+                    y: baseline + CGFloat(sin(theta)) * ry - size * 0.5)
+            .zIndex(depth + 2)
             .contentShape(Rectangle())
             .onTapGesture { isFront ? onEnter() : select(pane) }
             .help(isFront
                   ? L10n.s("进入「\(pane.title)」", "Enter “\(pane.title)”")
-                  : "\(WuXingTheme.theme(for: pane).beast) · \(pane.title)")
+                  : "\(t.beast) · \(pane.title)")
     }
 
-    private func flowDrag(slotWidth: CGFloat) -> some Gesture {
-        DragGesture(minimumDistance: 8)
-            .onChanged { value in
-                if dragOrigin == nil { dragOrigin = focus }
-                focus = (dragOrigin ?? 0) - Double(value.translation.width / slotWidth)
+    private func arrowButton(_ dir: Int) -> some View {
+        Button { cycle(dir) } label: {
+            Image(systemName: dir < 0 ? "chevron.left" : "chevron.right")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundColor(Studio.inkSecondary)
+                .frame(width: 40, height: 40)
+                .background(Circle().fill(Studio.surface))
+                .overlay(Circle().strokeBorder(Studio.hairline, lineWidth: 1))
+                .shadow(color: Studio.shadowSoft, radius: 8, y: 3)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(dir < 0 ? L10n.s("上一界", "Previous realm")
+                                    : L10n.s("下一界", "Next realm"))
+        .help(dir < 0 ? L10n.s("上一界", "Previous realm") : L10n.s("下一界", "Next realm"))
+    }
+
+    // MARK: 铭牌（卡片上那些字现在长在这儿）
+
+    private var nameplate: some View {
+        let stats = statsFor(selection)
+        return VStack(spacing: 8) {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Text(theme.beast)
+                    .font(Studio.display(30, weight: .semibold))
+                    .foregroundColor(Studio.ink)
+                Text("\(theme.element) · \(selection.title)")
+                    .font(Studio.microLabel(10))
+                    .tracking(1.6)
+                    .foregroundColor(theme.primary)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 3)
+                    .background(Capsule().fill(theme.soft))
             }
-            .onEnded { value in
-                let origin = dragOrigin ?? focus
-                dragOrigin = nil
-                let projected = origin - Double(value.predictedEndTranslation.width / slotWidth)
-                snap(to: projected)
+            HStack(spacing: 0) {
+                ForEach(Array(stats.prefix(4).enumerated()), id: \.element.id) { i, row in
+                    if i > 0 {
+                        Rectangle().fill(Studio.hairline)
+                            .frame(width: 1, height: 22)
+                            .padding(.horizontal, 16)
+                    }
+                    VStack(spacing: 2) {
+                        Text(row.label.uppercased())
+                            .font(Studio.microLabel(9))
+                            .tracking(1.1)
+                            .foregroundColor(Studio.inkTertiary)
+                        Text(row.value)
+                            .font(Studio.figure(17))
+                            .foregroundColor(Studio.ink)
+                    }
+                    .frame(minWidth: 62)
+                }
             }
+        }
+        .frame(maxWidth: .infinity)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: selection)
     }
 
     // MARK: 底部三段栏
 
     private var bottomRail: some View {
         let slots = loadoutFor(selection)
-        let skills = skillsFor(selection)
         return StudioPanel {
-            HStack(alignment: .center, spacing: 20) {
+            HStack(alignment: .center, spacing: 18) {
                 VStack(alignment: .leading, spacing: 8) {
                     SectionLabel(L10n.s("装备 · LOADOUT", "LOADOUT"))
                     HStack(spacing: 8) {
@@ -189,18 +213,28 @@ struct RosterScreen: View {
                         }
                     }
                 }
+                .fixedSize()
 
                 railDivider
 
                 VStack(alignment: .leading, spacing: 8) {
-                    SectionLabel(L10n.s("能力 · SKILLS", "SKILLS"))
                     HStack(spacing: 8) {
-                        ForEach(skills) { skill in
-                            SkillDot(icon: skill.icon, title: skill.title,
-                                     tint: theme.primary, active: skill.active)
-                        }
+                        SectionLabel(L10n.s("技能 · SKILLS", "SKILLS"))
+                        Text(L10n.s("点一下就把这件事交给 AI", "One click hands it to the AI"))
+                            .font(.system(size: 9))
+                            .foregroundColor(Studio.inkTertiary.opacity(0.8))
                     }
-                    .frame(height: 36)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(skillsFor(selection)) { skill in
+                                SkillChip(skill: skill, tint: theme.primary,
+                                          onRun: { onRunSkill(skill) },
+                                          onRemove: skill.builtIn ? nil : { onRemoveSkill(skill) })
+                            }
+                            importChip
+                        }
+                        .padding(.vertical, 1)
+                    }
                 }
 
                 Spacer(minLength: 8)
@@ -212,33 +246,85 @@ struct RosterScreen: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                     HStack(spacing: 8) {
-                        Button(L10n.s("进入", "SELECT")) { onEnter() }
+                        Button(L10n.s("进入", "Enter")) { onEnter() }
                             .buttonStyle(.studioPrimary(tint: theme.primary))
                             .keyboardShortcut(.defaultAction)
                             .help(L10n.s("进入「\(selection.title)」工作台", "Open the \(selection.title) workspace"))
-                        Button(analyzeTitle.isEmpty ? L10n.s("AI 分析", "ANALYZE") : analyzeTitle) { onAnalyze() }
+                        Button(analyzeTitle.isEmpty ? L10n.s("AI 分析", "Analyze") : analyzeTitle) { onAnalyze() }
                             .buttonStyle(.studioSecondary)
                             .disabled(analyzeDisabled)
-                        Button(L10n.s("设置", "SETTINGS")) { onSettings() }
+                        Button(L10n.s("设置", "Settings")) { onSettings() }
                             .buttonStyle(.studioSecondary)
                     }
                 }
+                .fixedSize()
             }
             .padding(.horizontal, 18)
-            .padding(.vertical, 13)
+            .padding(.vertical, 12)
         }
+    }
+
+    /// 导入技能：走系统文件面板，只收 .json。
+    private var importChip: some View {
+        Button {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [.json]
+            panel.allowsMultipleSelection = true
+            panel.canChooseDirectories = false
+            panel.prompt = L10n.s("导入", "Import")
+            panel.message = L10n.s("选择技能文件（.json）。技能只是一段提示词，导入后不会自动执行任何操作。",
+                                   "Pick skill files (.json). A skill is just a prompt — importing never runs anything.")
+            if panel.runModal() == .OK { onImportSkills(panel.urls) }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: "plus")
+                    .font(.system(size: 10, weight: .semibold))
+                Text(L10n.s("导入", "Import"))
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(Studio.inkSecondary)
+            .padding(.horizontal, 11)
+            .frame(height: 28)
+            .background(Capsule(style: .continuous).fill(Studio.surfaceMuted))
+            .overlay(Capsule(style: .continuous)
+                .strokeBorder(Studio.hairline, style: StrokeStyle(lineWidth: 1, dash: [3, 2])))
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(L10n.s("导入技能", "Import skills"))
+        .help(L10n.s("导入 .json 技能文件；技能只是提示词，不会自动执行任何操作",
+                     "Import .json skills; a skill is only a prompt and never runs anything by itself"))
     }
 
     private var railDivider: some View {
         Rectangle().fill(Studio.hairline).frame(width: 1, height: 46)
     }
 
-    // MARK: 选择逻辑
+    // MARK: 转轨
+
+    private func orbitDrag(slotWidth: CGFloat) -> some Gesture {
+        DragGesture(minimumDistance: 8)
+            .onChanged { value in
+                if dragOrigin == nil { dragOrigin = focus }
+                focus = (dragOrigin ?? 0) - Double(value.translation.width / slotWidth)
+            }
+            .onEnded { value in
+                let origin = dragOrigin ?? focus
+                dragOrigin = nil
+                snap(to: origin - Double(value.predictedEndTranslation.width / slotWidth))
+            }
+    }
+
+    private func cycle(_ dir: Int) {
+        var i = Int(focus.rounded()) + dir
+        i = ((i % count) + count) % count
+        select(panes[i])
+    }
 
     private func select(_ pane: AppView.Pane) {
         rotate(to: pane, commit: true)
     }
 
+    /// 转到目标界：沿「绕一圈里最短的那条路」走，不会为了到隔壁而绕远。
     private func rotate(to pane: AppView.Pane, commit: Bool) {
         guard let idx = panes.firstIndex(of: pane) else { return }
         let n = Double(count)
@@ -257,209 +343,138 @@ struct RosterScreen: View {
     }
 
     private func snap(to projected: Double) {
-        let nearest = projected.rounded()
-        var idx = Int(nearest) % count
+        var idx = Int(projected.rounded()) % count
         if idx < 0 { idx += count }
         select(panes[idx])
     }
 }
 
-// MARK: - 单张角色卡
+// MARK: - 轨道环
 
-/// 白卡：上半身立绘 + 名 + 界别 + 属性行。选中卡抬起并压一条行色。
-/// Equatable：采样数值没变时整套卡面跳过重绘（监控 2s 一刷不再打穿卡组）。
-struct RosterCard: View, Equatable {
+/// 星系感的来源：一圈静止的细椭圆 + 一圈缓慢自转的虚线椭圆。
+/// 自转走隐式动画（GPU 插值），不逐帧重跑 body。
+struct OrbitRing: View {
     let theme: WuXingTheme.Theme
-    let paneTitle: String
-    let stats: [CardStat]
-    var selected: Bool = false
-    var portraitHeight: CGFloat = 116
-
-    static func == (lhs: RosterCard, rhs: RosterCard) -> Bool {
-        lhs.theme.assetName == rhs.theme.assetName      // assetName 唯一标识一界
-            && lhs.selected == rhs.selected
-            && lhs.paneTitle == rhs.paneTitle
-            && lhs.portraitHeight == rhs.portraitHeight
-            && lhs.stats == rhs.stats
-    }
+    let rx: CGFloat
+    let ry: CGFloat
+    var animated: Bool = true
+    @State private var spin = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            if selected {
-                Rectangle().fill(theme.primary).frame(height: 3)
-            }
-            portrait
-            VStack(alignment: .leading, spacing: 3) {
-                Text(theme.beast)
-                    .font(Studio.display(19, weight: .semibold))
-                    .foregroundColor(Studio.ink)
-                    .lineLimit(1)
-                Text("\(theme.element) · \(paneTitle)")
-                    .font(Studio.microLabel(9))
-                    .tracking(1.2)
-                    .foregroundColor(theme.primary)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 14)
-            .padding(.top, 11)
-
-            Spacer(minLength: 8)
-
-            // 属性行贴着卡底排：参考稿里名字紧跟头像，数值压在最下面。
-            VStack(spacing: 7) {
-                Rectangle().fill(Studio.hairline).frame(height: 1)
-                ForEach(stats.prefix(4)) { row in
-                    StatReadout(label: row.label, value: row.value,
-                                ratio: row.ratio, tint: theme.primary, compact: true)
-                        .equatable()
-                }
-            }
-            .padding(.horizontal, 14)
-            .padding(.bottom, 15)
-        }
-        // 卡面是「立在影棚地上的展板」，不是贴上去的白方块。
-        // 融进场景靠的是柔和的描边和接地投影，而不是半透明——
-        // 卡牌本来就相互叠着，透一点就会把后面那张的名字漏到前面这张的属性行上。
-        .background(RoundedRectangle(cornerRadius: Studio.radiusCard, style: .continuous)
-            .fill(selected ? Studio.surface : Studio.canvasTop))
-        .clipShape(RoundedRectangle(cornerRadius: Studio.radiusCard, style: .continuous))
-        .overlay(
-            RoundedRectangle(cornerRadius: Studio.radiusCard, style: .continuous)
-                .strokeBorder(selected ? theme.primary.opacity(0.30) : Studio.hairline,
-                              lineWidth: 1)
-        )
-        .shadow(color: Studio.hex(0x2B3240, selected ? 0.15 : 0.08),
-                radius: selected ? 30 : 16,
-                y: selected ? 16 : 9)
-        .compositingGroup()
-    }
-
-    /// 头像位：浅色底盘 + 去背立绘，绝不做成一张贴了边的方形照片。
-    private var portrait: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 15, style: .continuous)
-                .fill(LinearGradient(colors: [theme.soft, Studio.surfaceMuted.opacity(0.5)],
-                                     startPoint: .top, endPoint: .bottom))
-            // 缩放副本：原图接近 900px，卡面只有 ~180pt，直接喂原图会在每个动画帧重采样。
-            if let img = MythAsset.image(theme.cutoutName, fitting: portraitHeight)
-                ?? MythAsset.image(theme.assetName, fitting: portraitHeight) {
-                Image(nsImage: img)
-                    .resizable()
-                    .interpolation(.medium)
-                    .scaledToFit()
-                    .padding(8)
-                    .shadow(color: .black.opacity(0.16), radius: 5, y: 3)
+            Ellipse()
+                .strokeBorder(Studio.hairlineStrong.opacity(0.42), lineWidth: 1)
+                .frame(width: rx * 2, height: ry * 2)
+            Ellipse()
+                .strokeBorder(theme.primary.opacity(0.22),
+                              style: StrokeStyle(lineWidth: 1, dash: [2, 14]))
+                .frame(width: rx * 2, height: ry * 2)
+                .rotationEffect(.degrees(spin ? 360 : 0))
+        }
+        .allowsHitTesting(false)
+        .onAppear {
+            guard animated else { return }
+            withAnimation(.linear(duration: 48).repeatForever(autoreverses: false)) {
+                spin = true
             }
         }
-        .frame(height: portraitHeight)
-        .drawingGroup()                                  // 立绘+投影只栅格化一次，转卡时复用
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
     }
 }
 
-// MARK: - 英雄台
+// MARK: - 轨道上的一只神兽
 
-/// 右侧英雄台：巨大行字水印 + 去背立绘 + 接地投影 + 地面倒影，idle 轻微起伏。
-///
-/// idle 动画走隐式动画（repeatForever）而不是 TimelineView：
-/// TimelineView 会按帧重跑整个 body——立绘、辉光、倒影、投影全部重新求值，
-/// 常驻窗口里这就是十几个百分点的 CPU。改成隐式动画后每帧变化的只有
-/// offset / rotation 两个可动画属性，由渲染服务在 GPU 上插值，body 一次都不重跑。
-struct HeroStage: View {
+/// 立绘本体 + 光环 + 接地投影 + 倒影。只有最前那只开全套特效，
+/// 后面的都是缩小压暗的剪影——不然六套辉光叠在一起就是一片糊。
+struct BeastFigure: View {
     let theme: WuXingTheme.Theme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    let size: CGFloat
+    var isFront: Bool = false
+    var animated: Bool = true
+
     @State private var idle = false
+    @State private var pulse = false
 
     var body: some View {
-        GeometryReader { geo in
-            let h = geo.size.height
-            ZStack(alignment: .bottom) {
-                watermark(height: h)
-                figure(size: geo.size)
-                    .offset(y: idle ? 3 : -3)
-                    .rotation3DEffect(.degrees(idle ? 3.5 : -3.5),
-                                      axis: (x: 0.06, y: 1, z: 0), perspective: 0.5)
+        let img = MythAsset.image(theme.cutoutName, fitting: size)
+            ?? MythAsset.image(theme.assetName, fitting: size)
+        return ZStack {
+            if isFront {
+                aura
             }
-            .frame(width: geo.size.width, height: h)
+            VStack(spacing: 0) {
+                Group {
+                    if let img {
+                        Image(nsImage: img)
+                            .resizable()
+                            .interpolation(.medium)
+                            .scaledToFit()
+                            .shadow(color: theme.glow.opacity(isFront ? 0.32 : 0.12),
+                                    radius: isFront ? 30 : 10, y: 8)
+                    }
+                }
+                .frame(width: size, height: size * 0.80)
+
+                ZStack(alignment: .top) {
+                    contactShadow
+                    if isFront, let img { reflection(img) }
+                }
+                .frame(height: size * 0.20)
+            }
+            .drawingGroup()             // 立绘+辉光+倒影栅格化一次，转轨时纯 GPU 合成
+            .offset(y: idle ? 3 : -3)
         }
+        .frame(width: size, height: size)
         .onAppear {
-            guard !reduceMotion else { return }
-            withAnimation(.easeInOut(duration: 3.2).repeatForever(autoreverses: true)) {
+            guard animated else { return }
+            withAnimation(.easeInOut(duration: 3.0).repeatForever(autoreverses: true)) {
                 idle = true
             }
-        }
-        .hideFocusRing()
-    }
-
-    /// 行字水印：极淡的一个大字，给画面一个重心又不抢立绘。
-    private func watermark(height: CGFloat) -> some View {
-        Text(theme.element)
-            .font(.system(size: max(120, height * 0.66), weight: .black, design: .serif))
-            .foregroundColor(Studio.hex(0x2A3340, 0.045))
-            .offset(y: -height * 0.10)
-            .allowsHitTesting(false)
-    }
-
-    private func figure(size: CGSize) -> some View {
-        let heroH = size.height * 0.78
-        // 缩放副本：原图接近 900px，直接喂原图会在每次重绘时重采样。
-        let img = MythAsset.image(theme.cutoutName, fitting: heroH)
-            ?? MythAsset.image(theme.assetName, fitting: heroH)
-        let reflectH = size.height * 0.13
-        let bottomPad = size.height * 0.05
-
-        return VStack(spacing: 0) {
-            Spacer(minLength: 0)
-            Group {
-                if let img {
-                    Image(nsImage: img)
-                        .resizable()
-                        .interpolation(.medium)
-                        .scaledToFit()
-                        .shadow(color: theme.glow.opacity(0.22), radius: 26, y: 10)
+            if isFront {
+                withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) {
+                    pulse = true
                 }
             }
-            .frame(maxWidth: size.width * 0.76, maxHeight: heroH)
-
-            ZStack(alignment: .top) {
-                contactShadow(width: size.width)
-                    .offset(y: -7)
-                reflection(img)
-            }
-            .frame(height: reflectH)
         }
-        .padding(.bottom, bottomPad)
-        .padding(.horizontal, 10)
-        // 立绘 + 辉光 + 倒影 + 投影栅格化成一张位图，随后的位移/旋转纯 GPU 合成。
-        .drawingGroup()
     }
 
-    /// 接地投影：立绘脚下那团压得住的暗，是「站在地上」而不是「浮着」的关键。
-    private func contactShadow(width: CGFloat) -> some View {
+    /// 行色光环：主角脚下那圈呼吸的光，是「这只被选中了」最直接的信号。
+    private var aura: some View {
+        ZStack {
+            Circle()
+                .fill(RadialGradient(colors: [theme.glow.opacity(0.20), .clear],
+                                     center: .center,
+                                     startRadius: size * 0.06,
+                                     endRadius: size * 0.52))
+                .scaleEffect(pulse ? 1.06 : 0.94)
+            Circle()
+                .strokeBorder(theme.primary.opacity(0.16), lineWidth: 1)
+                .frame(width: size * 0.86, height: size * 0.86)
+                .scaleEffect(pulse ? 1.04 : 0.98)
+        }
+        .allowsHitTesting(false)
+    }
+
+    private var contactShadow: some View {
         Ellipse()
-            .fill(RadialGradient(colors: [Studio.hex(0x2B3240, 0.28), .clear],
-                                 center: .center, startRadius: 0, endRadius: width * 0.22))
-            .frame(width: width * 0.52, height: 22)
-            .blur(radius: 7)
+            .fill(RadialGradient(colors: [Studio.hex(0x2B3240, isFront ? 0.26 : 0.14), .clear],
+                                 center: .center, startRadius: 0, endRadius: size * 0.24))
+            .frame(width: size * 0.56, height: size * 0.10)
+            .blur(radius: 6)
+            .offset(y: -size * 0.03)
             .allowsHitTesting(false)
     }
 
-    @ViewBuilder
-    private func reflection(_ img: NSImage?) -> some View {
-        if let img {
-            Image(nsImage: img)
-                .resizable()
-                .interpolation(.high)
-                .scaledToFit()
-                .scaleEffect(x: 1, y: -1)
-                .opacity(0.16)
-                .blur(radius: 1.2)
-                .mask(
-                    LinearGradient(colors: [Color.white.opacity(0.7), .clear],
-                                   startPoint: .top, endPoint: .bottom)
-                )
-                .allowsHitTesting(false)
-        }
+    private func reflection(_ img: NSImage) -> some View {
+        Image(nsImage: img)
+            .resizable()
+            .interpolation(.medium)
+            .scaledToFit()
+            .scaleEffect(x: 1, y: -1)
+            .frame(width: size, height: size * 0.20)
+            .opacity(0.15)
+            .blur(radius: 1.2)
+            .mask(LinearGradient(colors: [Color.white.opacity(0.75), .clear],
+                                 startPoint: .top, endPoint: .bottom))
+            .allowsHitTesting(false)
     }
 }

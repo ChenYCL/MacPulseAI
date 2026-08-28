@@ -57,56 +57,13 @@ struct AppView: View {
             }
         }
 
-        /// 能力点：本页具备的能力/约束说明。
-        var skills: [SkillSpec] {
-            switch self {
-            case .status:
-                return [
-                    SkillSpec(icon: "eye", title: L10n.s("实时只读采样", "Live read-only sampling")),
-                    SkillSpec(icon: "person.badge.shield.checkmark", title: L10n.s("终止前逐项确认", "Per-item confirm before quit")),
-                    SkillSpec(icon: "sparkles.rectangle.stack", title: L10n.s("AI 解释进程", "AI explains processes")),
-                    SkillSpec(icon: "doc.on.doc", title: L10n.s("导出进程信息", "Export process info"))
-                ]
-            case .clean:
-                return [
-                    SkillSpec(icon: "trash", title: L10n.s("移入废纸篓可恢复", "Trash = restorable")),
-                    SkillSpec(icon: "arrow.triangle.2.circlepath", title: L10n.s("只列可再生缓存", "Regenerable caches only")),
-                    SkillSpec(icon: "exclamationmark.shield", title: L10n.s("存疑项先问再动", "Asks before touching")),
-                    SkillSpec(icon: "sparkles", title: L10n.s("AI 评估清理项", "AI reviews items"))
-                ]
-            case .software:
-                return [
-                    SkillSpec(icon: "app.badge", title: L10n.s("应用与启动项清单", "Apps & login items")),
-                    SkillSpec(icon: "magnifyingglass", title: L10n.s("残留文件扫描", "Leftover scan")),
-                    SkillSpec(icon: "trash", title: L10n.s("卸载进废纸篓", "Uninstall via Trash")),
-                    SkillSpec(icon: "sparkles", title: L10n.s("AI 审查精简建议", "AI slimming advice"))
-                ]
-            case .optimize:
-                return [
-                    SkillSpec(icon: "checkmark.seal", title: L10n.s("维护前逐项说明", "Explains before running")),
-                    SkillSpec(icon: "wrench.and.screwdriver", title: L10n.s("标准维护命令", "Standard maintenance")),
-                    SkillSpec(icon: "clock.arrow.circlepath", title: L10n.s("维护可随时中断", "Interruptible")),
-                    SkillSpec(icon: "sparkles", title: L10n.s("AI 按状态建议", "AI state-aware advice"))
-                ]
-            case .analyze:
-                return [
-                    SkillSpec(icon: "ruler", title: L10n.s("只读丈量磁盘", "Read-only measuring")),
-                    SkillSpec(icon: "folder.badge.gearshape", title: L10n.s("逐层下钻目录", "Drill into folders")),
-                    SkillSpec(icon: "trash", title: L10n.s("删除仅进废纸篓", "Trash-only deletion")),
-                    SkillSpec(icon: "sparkles", title: L10n.s("AI 解读空间去向", "AI interprets usage"))
-                ]
-            case .security:
-                return [
-                    SkillSpec(icon: "shield", title: L10n.s("本机体检不发外网", "On-device audit")),
-                    SkillSpec(icon: "clipboard", title: L10n.s("剪贴板脱敏", "Redacted clipboard")),
-                    SkillSpec(icon: "network", title: L10n.s("端口监听清单", "Port inventory")),
-                    SkillSpec(icon: "sparkles", title: L10n.s("AI 恶意内容审查", "AI content review"))
-                ]
-            }
-        }
     }
 
     @StateObject private var analyzeModel = AnalyzeModel()
+    @StateObject private var skillStore = SkillStore()
+    /// 安全页的深链请求：装备槽要能直接落到「端口」分段或重跑剪贴板体检，
+    /// 否则那几格就只是三个都调 enter(.security) 的假按钮。
+    @State private var securityRequest: SecurityView.Request?
 
     private var chatVisible: Bool { showAIPanel || aiPanelPinned }
 
@@ -251,12 +208,12 @@ struct AppView: View {
             ]
         case .security:
             return [
-                QuickSlot(icon: "shield.lefthalf.filled",
-                          title: L10n.s("开始本机安全体检", "Run the on-device audit"),
-                          action: { enter(.security) }),
+                QuickSlot(icon: "doc.on.clipboard",
+                          title: L10n.s("重新体检剪贴板", "Re-check the clipboard"),
+                          action: { enter(.security); securityRequest = .recheckClipboard }),
                 QuickSlot(icon: "network",
                           title: L10n.s("查看端口监听", "Inspect listening ports"),
-                          action: { enter(.security) }),
+                          action: { enter(.security); securityRequest = .showPorts }),
                 enterSlot, aiSlot
             ]
         }
@@ -304,7 +261,10 @@ struct AppView: View {
     var body: some View {
         ZStack {
             StudioBackdrop(theme: currentTheme,
-                           lightCenter: activePane == nil ? UnitPoint(x: 0.68, y: 0.42) : .center)
+                           loadHistory: model.loadHistory,
+                           memoryRatio: model.memoryUsedPercent.map { $0 / 100 },
+                           processCount: model.processes.count,
+                           lightCenter: activePane == nil ? UnitPoint(x: 0.5, y: 0.38) : .center)
             VStack(spacing: 0) {
                 TopNavBar(stat: StatValue(model.load),
                           memPercent: model.memoryUsedPercent,
@@ -371,7 +331,10 @@ struct AppView: View {
         RosterScreen(selection: $previewPane,
                      statsFor: cardStats(for:),
                      loadoutFor: loadout(for:),
-                     skillsFor: { $0.skills },
+                     skillsFor: { skillStore.skills(for: $0) },
+                     onRunSkill: { runSkill($0) },
+                     onRemoveSkill: { skillStore.remove($0) },
+                     onImportSkills: { skillStore.importSkills(from: $0) },
                      onEnter: { enter(previewPane) },
                      onAnalyze: { runAnalysis() },
                      onSettings: { showSettings = true },
@@ -510,6 +473,7 @@ struct AppView: View {
             })
         case .security:
             SecurityView(chat: chat, monitor: model,
+                         request: $securityRequest,
                          configProvider: { store.settings.llmConfig() },
                          onAnalyze: {
                              ensureChatConfigured()
@@ -716,6 +680,16 @@ struct AppView: View {
             ensureChatConfigured()
             chat.startSecurityAudit()
         }
+    }
+
+    /// 跑一个技能：切到它所属的界，打开对话面板，把提示词当成一条普通用户消息发出去。
+    /// 技能没有任何独立的执行通道——模型之后提议的动作照旧走 HITL 确认卡。
+    private func runSkill(_ skill: Skill) {
+        ensureChatConfigured()
+        if let pane = Pane(rawValue: skill.pane) { enter(pane) }
+        else if activePane == nil { enter(previewPane) }
+        showAIPanel = true
+        chat.send(draft: skill.prompt)
     }
 
     private func explainSelected() {
