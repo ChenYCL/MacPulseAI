@@ -17,6 +17,20 @@ else
 fi
 [ -f "$BIN" ] || { echo "找不到产物 $BIN" >&2; exit 1; }
 
+# 版本号从标签推导，CI 和本地都不用再传。
+# 之前这里硬编码 1.0.0，所有历史发布的 Info.plist 都写着 1.0.0；
+# 换成默认值同样是把问题从一个数字挪到另一个数字——下次发版照样是错的。
+if [ -z "${MARKETING_VERSION:-}" ]; then
+  MARKETING_VERSION="${GITHUB_REF_NAME:-$(git describe --tags --abbrev=0 2>/dev/null || echo)}"
+  MARKETING_VERSION="${MARKETING_VERSION#v}"
+  # 不在标签上（本地迭代）就标成 0.0.0-dev，别谎报成某个正式版本
+  case "$MARKETING_VERSION" in
+    ''|*[!0-9.]*) MARKETING_VERSION="0.0.0" ;;
+  esac
+fi
+BUILD_VERSION="${BUILD_VERSION:-$(printf '%s' "$MARKETING_VERSION" | tr -d '.')}"
+export MARKETING_VERSION BUILD_VERSION
+
 APP="build/MacPulse.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
@@ -42,8 +56,8 @@ cat > "$APP/Contents/Info.plist" <<EOF
     <key>CFBundleIdentifier</key><string>com.chenycl.macpulseai</string>
     <key>CFBundleExecutable</key><string>MacPulse</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>${MARKETING_VERSION:-2.4.0}</string>
-    <key>CFBundleVersion</key><string>${BUILD_VERSION:-2400}</string>
+    <key>CFBundleShortVersionString</key><string>${MARKETING_VERSION}</string>
+    <key>CFBundleVersion</key><string>${BUILD_VERSION}</string>
     <key>CFBundleDevelopmentRegion</key><string>zh-Hans</string>
     <key>CFBundleLocalizations</key>
     <array>
@@ -61,4 +75,4 @@ cat > "$APP/Contents/Info.plist" <<EOF
 EOF
 
 codesign --force --sign - "$APP" >/dev/null
-echo "Built $(pwd)/$APP  ($(lipo -archs "$APP/Contents/MacOS/MacPulse" 2>/dev/null || echo unknown))"
+echo "Built $(pwd)/$APP  v$MARKETING_VERSION ($(lipo -archs "$APP/Contents/MacOS/MacPulse" 2>/dev/null || echo unknown))"
