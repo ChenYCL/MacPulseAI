@@ -142,7 +142,7 @@ Studio.microLabel(_:)  全大写微标 + 大字距
 
 ```bash
 swift build                     # 编译
-swift test                      # 88 个单元测试，必须全绿
+swift test                      # 90 个单元测试，必须全绿
 ./scripts/build_app.sh          # 打出 build/MacPulse.app
 open build/MacPulse.app
 
@@ -185,6 +185,13 @@ swift scripts/cutout.swift      # 从 art/hero-*.jpg 重新生成去背立绘
   换列时 order 往往不变，只比 order 会把表头点击整个吞掉。
 - 给 `@Published` 加字段前想清楚发布频率。一个每拍都变的数组会把周围所有
   「值没变就不发布」的守卫全部作废。需要高频数据就用非 published 缓冲 + 节流的 tick。
+- `stopStreaming()` 先 `cancel()` 再 `+epoch`，并且**自己**把半截回答收尾。
+  不能指望 `streamInto` 的 `catch is CancellationError`——那里守着 `streamEpoch == epoch`，
+  用户中止路径永远不可达。收尾只走 `applyParsedOutput`（解析 + 建卡 + 落盘），
+  不能走 `finishAssistant`：后者带工具环，会在用户刚按下停止之后又开一轮流。
+- 任何会继续对话的异步分支（工具环、shell 续答）都必须挂到 `streamingTask` 上，
+  并在开跑前同步 `+epoch`。不挂 = 停止按钮取消不掉它；不 +epoch = `streamInto` 尾部
+  会在命令还在跑的时候就把 `isStreaming` 放掉，停止按钮消失、输入框解锁。
 - 测试文件里多一个花括号，后面的 `func test` 会变成文件作用域函数，XCTest **不会报错也不会运行**。
   改完对一下 `grep -c "func test"` 和 `swift test` 报的条数——曾经有 9 个测试
   （含全部 ShellGuard 危险命令拦截）这样静默失联，掩盖了一个真 bug。

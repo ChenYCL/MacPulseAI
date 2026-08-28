@@ -294,6 +294,58 @@ final class FeatureV2Tests: XCTestCase {
         XCTAssertTrue(again.messages.isEmpty, "清空必须落盘，重启后不再出现")
     }
 
+    /// 回归：用户点「停止」时，已经收到的半截回答必须按正常流程收尾——
+    /// 解析出 HITL 确认卡、去掉原始 <action> 标记、并落盘。
+    ///
+    /// 老写法把这件事交给 streamInto 的 `catch is CancellationError`，而那里守着
+    /// `streamEpoch == epoch`；stopStreaming() 恰恰是先 +epoch 再 cancel 的，
+    /// 于是那条路径对用户中止永远不可达：气泡里留着裸的 <action .../>，没有确认卡，
+    /// 重启后半截回答还会整个消失。
+    @MainActor
+    func testStopStreamingFinalizesPartialReplyIntoActionCard() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat_stop_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let partial: [ChatSession.ChatMessage] = [
+            .init(sender: .user, content: "看看哪个能杀"),
+            .init(sender: .assistant,
+                  content: "node 明显失控，建议终止。<action action=\"quit\" pid=\"4321\"/>")
+        ]
+        try JSONEncoder().encode(partial).write(to: url)
+
+        let chat = ChatSession(historyURL: url)
+        chat.stopStreaming()
+
+        let last = try XCTUnwrap(chat.messages.last)
+        XCTAssertFalse(last.content.contains("<action"), "原始标记必须从气泡里清掉")
+        XCTAssertTrue(last.content.contains("node 明显失控"), "正文要保留")
+        XCTAssertEqual(last.actions.count, 1, "半截回答里的动作也要建成确认卡")
+        XCTAssertEqual(last.actions.first?.action.pid, 4321)
+        XCTAssertEqual(last.actions.first?.state, .pending, "仍然要等用户确认，不能自动执行")
+
+        let reopened = ChatSession(historyURL: url)
+        XCTAssertEqual(reopened.messages.last?.actions.count, 1, "中止后的状态必须落盘")
+        XCTAssertFalse(reopened.messages.last?.content.contains("<action") ?? true)
+    }
+
+    /// 回归：中止后的收尾不许再开一轮流——半截里带 <shell> 只读命令也不例外。
+    @MainActor
+    func testStopStreamingDoesNotStartAnotherRound() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat_stop2_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let partial: [ChatSession.ChatMessage] = [
+            .init(sender: .assistant, content: "先看看端口。<shell>lsof -nP -iTCP -sTCP:LISTEN</shell>")
+        ]
+        try JSONEncoder().encode(partial).write(to: url)
+
+        let chat = ChatSession(historyURL: url)
+        chat.stopStreaming()
+
+        XCTAssertFalse(chat.isStreaming, "停止之后不能因为工具环又转起来")
+        XCTAssertEqual(chat.messages.count, 1, "不应追加工具结果消息")
+    }
+
     @MainActor
     func testStopStreamingClearsStreamingFlagWithoutWaitingForNetwork() {
         let chat = ChatSession(historyURL: nil)

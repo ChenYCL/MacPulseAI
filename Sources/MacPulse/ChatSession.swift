@@ -213,17 +213,26 @@ final class ChatSession: ObservableObject {
     }
 
     func stopStreaming() {
-        streamEpoch += 1
         streamingTask?.cancel()
+        streamEpoch += 1
         isStreaming = false
-        if let last = messages.last, Self.isGhostAssistant(last) {
-            pruneEmptyAssistant(id: last.id, note: nil)
+        // 半截回答要在这里收尾，不能指望 streamInto 的 catch is CancellationError：
+        // 那里守着 `streamEpoch == epoch`，而我们刚刚 +1，所以那条路径对「用户点停止」
+        // 永远走不到——结果就是气泡里留着原始的 <action .../> 标记、没有确认卡、也没落盘。
+        if let last = messages.last, last.sender == .assistant {
+            if Self.isGhostAssistant(last) {
+                pruneEmptyAssistant(id: last.id, note: nil)
+            } else {
+                // 只解析、只建卡，不触发工具环——用户刚按了停止，不能顺手再开一轮流。
+                applyParsedOutput(id: last.id, rawText: Self.normalizedModelOutput(last.content))
+            }
         }
+        persist()
     }
 
     func clear() {
-        streamEpoch += 1
         streamingTask?.cancel()
+        streamEpoch += 1
         isStreaming = false
         messages.removeAll()
         flaggedActions.removeAll()
@@ -531,7 +540,10 @@ final class ChatSession: ObservableObject {
     /// - `<tool name="snapshot"/>` → 回填最新实时摘要并续答；
     /// - `<shell>…</shell>` 经 SafetyGuard 分级：只读命令自动执行并把输出回填后续答；
     ///   写/未知命令生成 HITL 待确认卡；危险命令直接拦截。depth 防止无限循环。
-    private func finishAssistant(id: UUID, rawText: String, depth: Int = 0) {
+    /// 解析模型输出：去掉标记、建 HITL 动作卡、刷新进程表标红、落盘。
+    /// 不含工具环——用户中止时要的就是这半截，不能顺带再发一轮请求。
+    @discardableResult
+    private func applyParsedOutput(id: UUID, rawText: String) -> [AgentActionParser.Action] {
         let (clean, actions) = AgentActionParser.parseWithShell(rawText)
         updateMessage(id: id) { m in
             m.content = clean
@@ -544,6 +556,11 @@ final class ChatSession: ObservableObject {
         }
         refreshFlagged()
         persist()
+        return actions
+    }
+
+    private func finishAssistant(id: UUID, rawText: String, depth: Int = 0) {
+        let actions = applyParsedOutput(id: id, rawText: rawText)
 
         // —— 工具环 ——
         if Self.requestsSnapshot(rawText), depth < 2 {
@@ -562,9 +579,17 @@ final class ChatSession: ObservableObject {
             return false
         }
         if !autoShell.isEmpty, depth < 2 {
-            Task { [weak self] in
+            // 同步推进 epoch，让 streamInto 尾部的 `if streamEpoch == epoch { isStreaming = false }`
+            // 看到不一致：命令还在跑的时候不能把停止按钮和输入框放开。
+            streamEpoch += 1
+            let round = streamEpoch
+            isStreaming = true
+            // 挂到 streamingTask 上，否则 stopStreaming()/clear() 取消不了它——
+            // 用户按了停止，几秒后命令跑完，它照样会去开一轮新的流。
+            streamingTask = Task { [weak self] in
                 var feedback = ""
                 for action in autoShell {
+                    if Task.isCancelled { return }
                     guard let command = action.command else { continue }
                     do {
                         let result = try await ShellRunner.run(command)
@@ -576,7 +601,7 @@ final class ChatSession: ObservableObject {
                     }
                 }
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    guard let self, self.streamEpoch == round else { return }
                     // 卡片同步显示执行结果
                     for action in autoShell {
                         if let mid = self.messages.last(where: { $0.id == id })?.id,
