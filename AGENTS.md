@@ -142,7 +142,7 @@ Studio.microLabel(_:)  全大写微标 + 大字距
 
 ```bash
 swift build                     # 编译
-swift test                      # 77 个单元测试，必须全绿
+swift test                      # 79 个单元测试，必须全绿
 ./scripts/build_app.sh          # 打出 build/MacPulse.app
 open build/MacPulse.app
 
@@ -171,6 +171,11 @@ swift scripts/cutout.swift      # 从 art/hero-*.jpg 重新生成去背立绘
 - 半透明卡片叠在一起会把后面那张的文字透到前面来。要「融进场景」用柔和描边和接地投影，不要用透明度。
 - 程序化创建的 `NSApplication` 没有主菜单，`⌘C/⌘V` 会失效——`setupMainMenu()` 是必需的，别删。
 - `NSStatusItem` 左键弹 HUD、右键弹菜单：不要挂 `item.menu`，否则左键会被菜单抢走。
+- SSE 的 `finalize()` **必须先判 stopReason 再判有没有正文**。写成 `if !text.isEmpty { return text }`
+  打头的话，只要模型吐过一个字，截断判定和流中错误判定就永远够不着——被 max_tokens 砍在半句的
+  回答会被当成完整答案交出去，不报错也不重试。已有回归测试
+  （`testTruncatedAfterPartialTextRetriesWithLargerBudget`）钉住这个顺序。
+- 流式重试前必须调 `onReset` 让调用方清空占位消息，否则第二轮的增量会接在第一轮后面变成重复。
 
 ---
 

@@ -15,6 +15,8 @@ enum LLMError: LocalizedError {
     case badURL(String)
     case http(Int, String)
     case emptyResponse
+    /// 已经吐了正文但被 max_tokens 截断在半截。带上已收到的部分，供重试或降级展示。
+    case truncated(String)
     /// 模型只返回了思考过程没有正文（常见于思考型模型 + max_tokens 过小被截断）。
     case reasoningOnly(String)
     case invalidResponse(String)
@@ -30,6 +32,8 @@ enum LLMError: LocalizedError {
                 : L10n.s("HTTP \(code)：\(preview)", "HTTP \(code): \(preview)")
         case .emptyResponse:
             return L10n.s("模型返回内容为空", "Model returned empty content")
+        case .truncated:
+            return L10n.s("回答被 max_tokens 截断", "Reply was cut off by max_tokens")
         case .reasoningOnly(let preview):
             let trimmed = String(preview.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
             return L10n.s("模型只输出了思考过程，未生成正文（常见于思考型模型的 max_tokens 被截断）。可在设置中换用其他模型。\n思考片段：\(trimmed)",
@@ -61,9 +65,12 @@ protocol LLMServicing {
     func complete(system: String, user: String) async throws -> String
 
     /// 多轮流式补全：增量通过 onDelta 回调，最终返回拼接后的完整文本。
-    /// 思考型模型 max_tokens 截断时自动翻倍重试一次。
+    /// max_tokens 截断时自动加倍重试一次；重试前会先调 onReset，
+    /// 让调用方把已经显示出去的半截回答清掉——否则第二轮的增量会接在第一轮后面变成重复。
     /// Anthropic 协议会把 role==system 的消息抽出为顶层 system 参数。
-    func stream(messages: [LLMMessage], onDelta: @escaping (String) -> Void) async throws -> String
+    func stream(messages: [LLMMessage],
+                onDelta: @escaping (String) -> Void,
+                onReset: @escaping () -> Void) async throws -> String
 }
 
 enum LLMServiceFactory {
@@ -138,13 +145,26 @@ final class OpenAIService: LLMServicing {
         }
     }
 
-    func stream(messages: [LLMMessage], onDelta: @escaping (String) -> Void) async throws -> String {
+    func stream(messages: [LLMMessage],
+                onDelta: @escaping (String) -> Void,
+                onReset: @escaping () -> Void) async throws -> String {
         do {
-            return try await streamOnce(maxTokens: 4096, messages: messages, onDelta: onDelta)
+            return try await streamOnce(maxTokens: Self.firstBudget, messages: messages, onDelta: onDelta)
         } catch LLMError.reasoningOnly {
-            return try await streamOnce(maxTokens: 8192, messages: messages, onDelta: onDelta)
+            onReset()
+            return try await streamOnce(maxTokens: Self.retryBudget, messages: messages,
+                                        onDelta: onDelta, tolerateTruncation: true)
+        } catch LLMError.truncated {
+            // 半截回答已经显示出去了，重试前必须先让调用方清掉，否则会接成两遍。
+            onReset()
+            return try await streamOnce(maxTokens: Self.retryBudget, messages: messages,
+                                        onDelta: onDelta, tolerateTruncation: true)
         }
     }
+
+    /// 这些报告动辄带表格，4096 太紧，正常回答也会被砍。
+    static let firstBudget = 8192
+    static let retryBudget = 16384
 
     private func makeRequest(maxTokens: Int, stream: Bool, messages: [LLMMessage]) throws -> URLRequest {
         let base = try normalizedBase(config.baseURL)
@@ -192,7 +212,9 @@ final class OpenAIService: LLMServicing {
         }
     }
 
-    private func streamOnce(maxTokens: Int, messages: [LLMMessage], onDelta: @escaping (String) -> Void) async throws -> String {
+    private func streamOnce(maxTokens: Int, messages: [LLMMessage],
+                            onDelta: @escaping (String) -> Void,
+                            tolerateTruncation: Bool = false) async throws -> String {
         let req = try makeRequest(maxTokens: maxTokens, stream: true, messages: messages)
         let (bytes, response) = try await session.bytes(for: req)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
@@ -223,7 +245,7 @@ final class OpenAIService: LLMServicing {
                 }
             }
         }
-        return try acc.finalize()
+        return try acc.finalize(tolerateTruncation: tolerateTruncation)
     }
 }
 
@@ -288,14 +310,24 @@ final class AnthropicService: LLMServicing {
         }
     }
 
-    func stream(messages: [LLMMessage], onDelta: @escaping (String) -> Void) async throws -> String {
+    func stream(messages: [LLMMessage],
+                onDelta: @escaping (String) -> Void,
+                onReset: @escaping () -> Void) async throws -> String {
         // role==system 的消息抽取为 Anthropic 顶层 system 参数
         let system = messages.filter { $0.role == .system }.map { $0.content }.joined(separator: "\n\n")
         let chat = messages.filter { $0.role != .system }
         do {
-            return try await streamOnce(maxTokens: 4096, system: system, chat: chat, onDelta: onDelta)
+            return try await streamOnce(maxTokens: OpenAIService.firstBudget,
+                                        system: system, chat: chat, onDelta: onDelta)
         } catch LLMError.reasoningOnly {
-            return try await streamOnce(maxTokens: 8192, system: system, chat: chat, onDelta: onDelta)
+            onReset()
+            return try await streamOnce(maxTokens: OpenAIService.retryBudget, system: system,
+                                        chat: chat, onDelta: onDelta, tolerateTruncation: true)
+        } catch LLMError.truncated {
+            // 半截回答已经显示出去了，重试前必须先让调用方清掉，否则会接成两遍。
+            onReset()
+            return try await streamOnce(maxTokens: OpenAIService.retryBudget, system: system,
+                                        chat: chat, onDelta: onDelta, tolerateTruncation: true)
         }
     }
 
@@ -346,7 +378,9 @@ final class AnthropicService: LLMServicing {
         }
     }
 
-    private func streamOnce(maxTokens: Int, system: String, chat: [LLMMessage], onDelta: @escaping (String) -> Void) async throws -> String {
+    private func streamOnce(maxTokens: Int, system: String, chat: [LLMMessage],
+                            onDelta: @escaping (String) -> Void,
+                            tolerateTruncation: Bool = false) async throws -> String {
         let req = try makeRequest(maxTokens: maxTokens, stream: true, system: system, chat: chat)
         let (bytes, response) = try await session.bytes(for: req)
         if let http = response as? HTTPURLResponse, http.statusCode != 200 {
@@ -378,7 +412,7 @@ final class AnthropicService: LLMServicing {
                 if !reasoning.isEmpty { throw LLMError.reasoningOnly(reasoning) }
             }
         }
-        return try acc.finalize()
+        return try acc.finalize(tolerateTruncation: tolerateTruncation)
     }
 }
 
@@ -438,16 +472,45 @@ struct SSEAccumulator {
     }
 
     /// 结束时判定正文；思考-only/截断/流中错误等情况抛出可操作的错误。
-    func finalize() throws -> String {
-        if !text.isEmpty { return text }
-        if let errText = streamError {
-            throw LLMError.invalidResponse(errText)
+    ///
+    /// 顺序很重要：**必须先看 stopReason 再看有没有正文**。
+    /// 早先的写法是 `if !text.isEmpty { return text }` 打头，于是只要模型吐过一个字，
+    /// 后面的截断判定和流中错误判定就永远够不着——一段被 max_tokens 砍在半句的回答
+    /// 会被当成完整答案交出去，既不报错也不重试，界面上就是「说到一半没了」。
+    ///
+    /// - Parameter tolerateTruncation: 已经是加倍预算的第二轮了，再截断也不抛错，
+    ///   而是把半截内容连同说明一起交出去——总比把用户已经看到的字删掉强。
+    func finalize(tolerateTruncation: Bool = false) throws -> String {
+        let cut = (stopReason == "max_tokens" || stopReason == "length")
+
+        if !text.isEmpty {
+            if cut {
+                if tolerateTruncation { return text + Self.truncationNotice }
+                throw LLMError.truncated(text)
+            }
+            // 吐了正文但网关中途报错：内容留给用户，同时把错误说清楚，不要假装正常结束。
+            if let errText = streamError {
+                return text + Self.streamErrorNotice(errText)
+            }
+            return text
         }
+
+        if let errText = streamError { throw LLMError.invalidResponse(errText) }
         if !reasoning.isEmpty { throw LLMError.reasoningOnly(reasoning) }
-        if stopReason == "max_tokens" || stopReason == "length" {
+        if cut {
             throw LLMError.reasoningOnly(L10n.s("（响应因 max_tokens 截断）", "(response truncated by max_tokens)"))
         }
         throw LLMError.emptyResponse
+    }
+
+    static let truncationNotice = L10n.s(
+        "\n\n> ⚠️ 回答在这里被 max_tokens 截断了（已按加倍预算重试过一次）。可以让我「接着上面继续」。",
+        "\n\n> ⚠️ The reply was cut off here by max_tokens (already retried with double the budget). Ask me to continue from where it stopped.")
+
+    static func streamErrorNotice(_ detail: String) -> String {
+        let preview = String(detail.prefix(200)).trimmingCharacters(in: .whitespacesAndNewlines)
+        return L10n.s("\n\n> ⚠️ 输出中途被服务端打断：\(preview)",
+                      "\n\n> ⚠️ The stream was interrupted by the server: \(preview)")
     }
 }
 

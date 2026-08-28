@@ -155,7 +155,7 @@ final class FeatureV2Tests: XCTestCase {
         L10n.forced = .en
         defer { L10n.forced = nil }
         do {
-            _ = try await service.stream(messages: [.user("u")]) { _ in }
+            _ = try await service.stream(messages: [.user("u")], onDelta: { _ in }, onReset: {})
             XCTFail("应当抛出错误")
         } catch let error as LLMError {
             guard case .invalidResponse(let detail) = error else { return XCTFail("期望 invalidResponse，实际 \(error)") }
@@ -177,7 +177,7 @@ final class FeatureV2Tests: XCTestCase {
         L10n.forced = .en
         defer { L10n.forced = nil }
         do {
-            _ = try await service.stream(messages: [.user("u")]) { _ in }
+            _ = try await service.stream(messages: [.user("u")], onDelta: { _ in }, onReset: {})
             XCTFail("应当抛出错误")
         } catch let error as LLMError {
             guard case .invalidResponse(let detail) = error else { return XCTFail("期望 invalidResponse，实际 \(error)") }

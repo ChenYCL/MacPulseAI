@@ -35,7 +35,7 @@ final class LLMClientTests: XCTestCase {
         // 多轮消息直接透传
         let result = try await service.stream(messages: [
             .system("sys"), .user("第一问"), .assistant("第一答"), .user("第二问")
-        ]) { _ in }
+        ], onDelta: { _ in }, onReset: {})
 
         XCTAssertEqual(result, "你好，这是分析结果")
         let req = try XCTUnwrap(SharedStubURLProtocol.lastRequest)
@@ -66,7 +66,7 @@ final class LLMClientTests: XCTestCase {
         XCTAssertEqual(result, "pong")
 
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: SharedStubURLProtocol.body(of: XCTUnwrap(SharedStubURLProtocol.lastRequest))) as? [String: Any])
-        XCTAssertEqual(body["max_tokens"] as? Int, 4096)
+        XCTAssertEqual(body["max_tokens"] as? Int, 4096, "complete() 是轻量探测，仍用较小预算")
         let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
         XCTAssertEqual(messages.count, 2)
     }
@@ -105,7 +105,7 @@ final class LLMClientTests: XCTestCase {
 
         let result = try await service.stream(messages: [
             .system("系统提示词"), .user("问题"), .assistant("草稿"), .user("继续")
-        ]) { _ in }
+        ], onDelta: { _ in }, onReset: {})
 
         XCTAssertEqual(result, "部分一，部分二", "thinking 块不应混入正文")
         let req = try XCTUnwrap(SharedStubURLProtocol.lastRequest)
@@ -115,7 +115,7 @@ final class LLMClientTests: XCTestCase {
 
         let body = try XCTUnwrap(JSONSerialization.jsonObject(with: SharedStubURLProtocol.body(of: req)) as? [String: Any])
         XCTAssertEqual(body["model"] as? String, "claude-sonnet-4-5")
-        XCTAssertEqual(body["max_tokens"] as? Int, 4096)
+        XCTAssertEqual(body["max_tokens"] as? Int, OpenAIService.firstBudget)
         XCTAssertEqual(body["system"] as? String, "系统提示词", "system 消息应抽取到顶层 system 参数")
         let messages = try XCTUnwrap(body["messages"] as? [[String: Any]])
         XCTAssertEqual(messages.count, 3, "system 不应出现在 messages 数组中")
@@ -142,7 +142,7 @@ final class LLMClientTests: XCTestCase {
         let config = LLMConfig(provider: .anthropic, baseURL: "https://api.anthropic.com", apiKey: "k", model: "m")
         let service = AnthropicService(config: config, session: stubbedSession())
         do {
-            _ = try await service.stream(messages: [.user("u")]) { _ in }
+            _ = try await service.stream(messages: [.user("u")], onDelta: { _ in }, onReset: {})
             XCTFail("应当抛出错误")
         } catch let error as LLMError {
             guard case .emptyResponse = error else { return XCTFail("期望 emptyResponse，实际 \(error)") }
@@ -174,13 +174,85 @@ final class LLMClientTests: XCTestCase {
                                apiKey: "k", model: "glm-5.3-flash")
         let service = AnthropicService(config: config, session: stubbedSession())
 
-        let result = try await service.stream(messages: [.user("u")]) { _ in }
+        let result = try await service.stream(messages: [.user("u")], onDelta: { _ in }, onReset: {})
 
         XCTAssertEqual(result, "最终分析结果")
         XCTAssertEqual(counter.n, 2, "应在 thinking-only 后自动重试一次")
         let body = try XCTUnwrap(JSONSerialization.jsonObject(
             with: SharedStubURLProtocol.body(of: XCTUnwrap(SharedStubURLProtocol.lastRequest))) as? [String: Any])
-        XCTAssertEqual(body["max_tokens"] as? Int, 8192, "重试时 max_tokens 应翻倍")
+        XCTAssertEqual(body["max_tokens"] as? Int, OpenAIService.retryBudget, "重试时 max_tokens 应翻倍")
+    }
+
+    /// 回归：吐了正文但被 max_tokens 砍断时，不许当成完整答案交出去。
+    ///
+    /// 老写法是 `finalize()` 里 `if !text.isEmpty { return text }` 打头，
+    /// 于是只要模型吐过一个字，后面的截断判定就永远够不着——半句话的回答被静默当成
+    /// 正常结束，既不报错也不重试。界面上的表现就是「说到一半没了」。
+    func testTruncatedAfterPartialTextRetriesWithLargerBudget() async throws {
+        let counter = Counter()
+        SharedStubURLProtocol.handler = { req in
+            let n = counter.next()
+            let sse: String
+            if n == 1 {
+                sse = """
+                data: {"choices":[{"delta":{"content":"前半句"}}]}
+
+                data: {"choices":[{"delta":{},"finish_reason":"length"}]}
+
+                data: [DONE]
+
+                """
+            } else {
+                sse = """
+                data: {"choices":[{"delta":{"content":"完整的回答"}}]}
+
+                data: {"choices":[{"delta":{},"finish_reason":"stop"}]}
+
+                data: [DONE]
+
+                """
+            }
+            return (self.httpResponse(req.url!, code: 200), sse.data(using: .utf8)!)
+        }
+        let config = LLMConfig(provider: .openAICompatible, baseURL: "https://gw.example.com/v1",
+                               apiKey: "k", model: "m")
+        let service = OpenAIService(config: config, session: stubbedSession())
+
+        var deltas: [String] = []
+        var resets = 0
+        let result = try await service.stream(messages: [.user("u")],
+                                              onDelta: { deltas.append($0) },
+                                              onReset: { resets += 1 })
+
+        XCTAssertEqual(counter.n, 2, "截断后必须用加倍预算重试")
+        XCTAssertEqual(resets, 1, "重试前必须通知调用方清空已显示的半截回答")
+        XCTAssertEqual(result, "完整的回答")
+        XCTAssertEqual(deltas, ["前半句", "完整的回答"], "两轮的增量都会发出，靠 onReset 去重")
+        let body = try XCTUnwrap(JSONSerialization.jsonObject(
+            with: SharedStubURLProtocol.body(of: XCTUnwrap(SharedStubURLProtocol.lastRequest))) as? [String: Any])
+        XCTAssertEqual(body["max_tokens"] as? Int, OpenAIService.retryBudget)
+    }
+
+    /// 加倍预算之后仍然截断：不再抛错把用户已经看到的字删掉，而是留下内容 + 说明。
+    func testTruncatedTwiceKeepsPartialAndAppendsNotice() async throws {
+        SharedStubURLProtocol.handler = { req in
+            let sse = """
+            data: {"choices":[{"delta":{"content":"很长的半截"}}]}
+
+            data: {"choices":[{"delta":{},"finish_reason":"length"}]}
+
+            data: [DONE]
+
+            """
+            return (self.httpResponse(req.url!, code: 200), sse.data(using: .utf8)!)
+        }
+        let config = LLMConfig(provider: .openAICompatible, baseURL: "https://gw.example.com/v1",
+                               apiKey: "k", model: "m")
+        let service = OpenAIService(config: config, session: stubbedSession())
+
+        let result = try await service.stream(messages: [.user("u")], onDelta: { _ in }, onReset: {})
+        XCTAssertTrue(result.hasPrefix("很长的半截"), "已经收到的内容必须保留")
+        XCTAssertTrue(result.contains("max_tokens"), "必须明确告诉用户这里是被截断的")
     }
 
     func testAnthropicReasoningOnlyExhaustsRetryThrowsGuidance() async throws {
@@ -194,7 +266,7 @@ final class LLMClientTests: XCTestCase {
         let service = AnthropicService(config: config, session: stubbedSession())
 
         do {
-            _ = try await service.stream(messages: [.user("u")]) { _ in }
+            _ = try await service.stream(messages: [.user("u")], onDelta: { _ in }, onReset: {})
             XCTFail("应当抛出错误")
         } catch let error as LLMError {
             guard case .reasoningOnly(let preview) = error else { return XCTFail("期望 reasoningOnly，实际 \(error)") }
@@ -215,7 +287,7 @@ final class LLMClientTests: XCTestCase {
         L10n.forced = .en
         defer { L10n.forced = nil }
         do {
-            _ = try await service.stream(messages: [.user("u")]) { _ in }
+            _ = try await service.stream(messages: [.user("u")], onDelta: { _ in }, onReset: {})
             XCTFail("应当抛出错误")
         } catch let error as LLMError {
             guard case .reasoningOnly(let preview) = error else { return XCTFail("期望 reasoningOnly，实际 \(error)") }

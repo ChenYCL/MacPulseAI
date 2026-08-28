@@ -484,6 +484,13 @@ final class ChatSession: ObservableObject {
                             guard let self, self.streamEpoch == epoch else { return }
                             self.appendToMessage(id: placeholderID, delta: delta)
                         }
+                    } onReset: {
+                        // 上一轮被 max_tokens 砍断，正在用加倍预算重来：
+                        // 先把已经显示出去的半截清空，否则第二轮的增量会接在后面变成重复。
+                        Task { @MainActor [weak self] in
+                            guard let self, self.streamEpoch == epoch else { return }
+                            self.updateMessage(id: placeholderID) { $0.content = "" }
+                        }
                     }
                 guard self.streamEpoch == epoch else { return }
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(raw), depth: depth)
