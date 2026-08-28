@@ -25,15 +25,15 @@ Live process monitor · AI security audits · Disk cleanup · App uninstaller ·
 MacPulse AI 是一款开源、免费、原生（Swift + SwiftUI，零第三方依赖）的 macOS 系统管理工具：它把「活动监视器 + CleanMyMac + iStat」的能力合而为一，并内置 AI Agent——你可以用自然语言问「哪些进程可以杀」「磁盘为什么满了」，AI 会给出分析、证据和**需要你亲自确认才会执行**的操作建议（HITL，human-in-the-loop）。
 
 <p align="center">
-  <img src="docs/screenshot-roster.jpg" width="880" alt="MacPulse AI —— 选择台：六界封面流与神兽立绘">
+  <img src="docs/screenshot-roster.jpg" width="880" alt="MacPulse AI —— 星轨选择台：六界神兽在椭圆轨道上">
   <br>
-  <em>选择台：金木水火土門六界一界一位守护神兽，卡面直接读出该界的实时指标；底部装备栏可不进页就执行常用动作</em>
+  <em>选择台：金木水火土門六界各有一位守护神兽，排在一条椭圆星轨上。最前那只放大居中即当前选中的界，左右是相邻的两只——点侧边的兽、按左右箭头或横向拖拽都能换界。铭牌给出该界的实时读数，底栏可不进页就执行常用动作或把一件事交给 AI</em>
 </p>
 
 <p align="center">
   <img src="docs/screenshot.jpg" width="880" alt="MacPulse AI —— 进程列表与右侧 AI 对话面板">
   <br>
-  <em>状态页：顶部四张大读数卡先给结论，下方实时进程表读出 <code>com.apple.Virtualization.VirtualMachine</code> 的真实瞬时 133.2%（多核累加，非生命周期均值）；右侧可拖拽宽度的 AI 侧边栏，终止/清理动作一律需人工确认</em>
+  <em>状态页：顶部四张大读数卡先给结论，下方实时进程表读出 <code>node</code> 的真实瞬时 168.4%（多核累加，非生命周期均值）。图中 <code>ecosystemd</code> 带红色 AI 角标并被置顶——那是 AI 在右侧报告里点名的进程，但终止动作仍需你点确认卡</em>
 </p>
 
 ### 功能特性
@@ -64,6 +64,11 @@ MacPulse AI 是一款开源、免费、原生（Swift + SwiftUI，零第三方�
 - **HITL 动作卡**：AI 建议的每个终止/清理操作都是独立确认卡（进程名/PID/SIGTERM-SIGKILL 语义），确认前绝不执行；被建议的进程在左侧表格**标红置顶**
 - `<tool name="snapshot"/>` 数据新鲜度工具环；对话历史跨重启持久化；面板可拖拽调宽（320–860pt，双击复位）
 
+**🧩 技能（可导入）**
+- 选择台底栏的「技能」是一排真按钮：点一下就把这件事连同本界上下文交给 AI。每界内置两个
+- 支持从 `.json` 导入自定义技能（见 [`docs/skills/`](docs/skills/)），落盘在 `~/Library/Application Support/MacPulse/Skills/`，右键可移除（进废纸篓）
+- **技能只是一段提示词**：导入不会、也不能让它自己执行任何东西。它唯一能做的是「把这段话发给模型」，模型随后提议的终止/清理/shell 动作照旧逐条走人工确认卡与 ShellGuard——和你自己在对话框里打字是同一条路径
+
 **🌍 双语**：界面与 AI 输出均支持 中文 / English，跟随系统并可手动切换。
 
 ### 安装
@@ -73,7 +78,7 @@ MacPulse AI 是一款开源、免费、原生（Swift + SwiftUI，零第三方�
 # https://github.com/ChenYCL/MacPulseAI/releases/latest
 ```
 
-1. 打开 DMG，把 **MacPulse AI** 拖入 Applications
+1. 打开 DMG，把 **MacPulse AI** 拖入 Applications（universal 包，Apple Silicon 与 Intel 均原生运行）
 2. 首次打开：右键 → 「打开」（绕过 Gatekeeper 未公证提示）
 3. 设置 → 填入 OpenAI 兼容或 Anthropic 的 Base URL / API Key / 模型名（z.ai、DeepSeek、本地 Ollama 等任何兼容网关均可），点「测试连接」
 
@@ -91,7 +96,10 @@ swift test   # 90 个单元测试
 
 ### 🧪 Testing
 
-90 个单元测试覆盖：瞬时 CPU 数学（多核夹取/PID 复用回退）、ps/libproc 解析、两种 LLM 协议的流式 SSE 与错误事件（对照官方规范）、HITL 动作解析、SafetyGuard 拦截矩阵、剪贴板模式与脱敏、卸载器残留匹配、版本过滤、启动项扫描、Markdown 解析、设置持久化（0600）。另有 `tools/mock_llm.py` 本地双协议 mock 供无 Key 集成测试。
+90 个单元测试覆盖：瞬时 CPU 数学（多核夹取/PID 复用回退）、ps/libproc 解析、两种 LLM 协议的流式 SSE 与错误事件（对照官方规范，含 max_tokens 截断重试与去重）、HITL 动作解析与中止后的收尾、SafetyGuard 拦截矩阵、ShellGuard 危险命令硬拦截、剪贴板模式与脱敏、卸载器残留匹配、历史版本过滤、启动项扫描、Markdown 解析、素材降采样缓存、设置持久化（0600）。另有 `tools/mock_llm.py` 本地双协议 mock 供无 Key 集成测试。
+
+> 数量对得上很重要：测试类里多一个花括号会让后面的 `func test` 变成文件作用域函数，
+> XCTest 既不报错也不运行。改完对一下 `grep -c "func test"` 和 `swift test` 报的条数。
 
 ### 性能
 
@@ -106,15 +114,15 @@ swift test   # 90 个单元测试
 **MacPulse AI** is an open-source, native (Swift + SwiftUI, zero third-party deps) macOS utility that merges Activity Monitor + CleanMyMac + iStat into one app with a built-in AI agent. Ask "which processes can I kill?" or "why is my disk full?" in natural language; the agent returns evidence-based analysis and **action proposals that only run after you explicitly confirm them** (human-in-the-loop).
 
 <p align="center">
-  <img src="docs/screenshot-roster.jpg" width="880" alt="MacPulse AI — roster screen with the six guardian beasts">
+  <img src="docs/screenshot-roster.jpg" width="880" alt="MacPulse AI — six guardian beasts on an elliptical orbit">
   <br>
-  <em>The roster: one guardian beast per realm, each card reading that realm's live metrics; the loadout rail runs common actions without leaving the screen</em>
+  <em>The roster: six guardian beasts on an elliptical orbit. The one in front is the current realm; its two neighbours flank it. Click a neighbour, press the arrows, or drag sideways to rotate. The nameplate carries that realm's live readings; the rail below runs common actions — or hands one to the AI — without leaving the screen</em>
 </p>
 
 <p align="center">
   <img src="docs/screenshot.jpg" width="880" alt="MacPulse AI — process table with the AI side panel">
   <br>
-  <em>Status page: headline metric cards up top, live process table below, drag-resizable AI panel on the right — Markdown output, evidence-based findings, and every kill/clean action gated behind your confirmation</em>
+  <em>Status page: headline metric cards up top, live process table below reading <code>node</code> at a true instantaneous 168.4%. <code>ecosystemd</code> carries a red AI badge and is pinned to the top — the agent named it in the report on the right, but terminating it still needs you to click the confirmation card</em>
 </p>
 
 ### Feature Highlights
@@ -124,11 +132,12 @@ swift test   # 90 个单元测试
 - **💾 Disk** — four regenerable junk categories (app caches / logs / dev caches incl. Xcode·npm·gradle·playwright / **legacy CLI version bundles** like claude·cursor-agent·opencode with semantic-version newest-keep and running-build exclusion), review-first, everything to Trash; **app uninstaller** with 13 leftover-location review; maintenance actions (purge memory, flush DNS, **rebuild Launch Services**, empty Trash).
 - **🔌 Ports** — see who listens where, filter, AI-explain the process, HITL terminate. "Who's on port 3000" answered in seconds.
 - **🤖 AI agent (pinned on every tab)** — multi-turn streaming chat (SSE; OpenAI-compatible & Anthropic), full Markdown rendering (tables/code blocks), **controlled terminal agent**: read-only commands auto-execute with output fed back to the model; writes need confirmation; dangerous commands hard-blocked with alternatives. Every proposed kill/clean is a HITL card (process name/PID/signal semantics); suggested PIDs turn red and pin to the top of the process table. `<tool name="snapshot"/>` freshness loop; chat history persists across relaunch; drag-resizable panel (320–860pt, double-click reset).
+- **🧩 Skills (importable)** — the SKILLS row on the roster is a set of real buttons: one click hands that task, plus the realm's context, to the AI. Two built in per realm; import your own from `.json` (see [`docs/skills/`](docs/skills/)). **A skill is only a prompt** — importing one can never execute anything by itself. Whatever the model then proposes still goes through the HITL cards and ShellGuard, exactly as if you had typed it.
 - **🌍 Bilingual** — UI and AI output in 中文 / English, follows the system with manual override.
 
 ### Install
 
-Grab the DMG from [Releases](https://github.com/ChenYCL/MacPulseAI/releases/latest), drag **MacPulse AI** to Applications, right-click → Open on first launch (unsigned ad-hoc build), then paste your OpenAI-compatible or Anthropic endpoint + key in Settings and hit *Test Connection*. Works with z.ai, DeepSeek, local Ollama — any compatible gateway.
+Grab the DMG from [Releases](https://github.com/ChenYCL/MacPulseAI/releases/latest) — a universal build that runs natively on both Apple Silicon and Intel — drag **MacPulse AI** to Applications, right-click → Open on first launch (unsigned ad-hoc build), then paste your OpenAI-compatible or Anthropic endpoint + key in Settings and hit *Test Connection*. Works with z.ai, DeepSeek, local Ollama — any compatible gateway.
 
 ### Performance
 
