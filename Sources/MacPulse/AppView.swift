@@ -304,7 +304,9 @@ struct AppView: View {
         .onReceive(NotificationCenter.default.publisher(for: .macPulseRevealPane)) { note in
             if let raw = note.object as? String, let pane = Pane(rawValue: raw) {
                 previewPane = pane
-                activePane = pane
+                // 走 enter：菜单栏 HUD 点进来的界也要触发首扫，
+                // 直接赋 activePane 的话清理/软件/分析页会开成一张空表。
+                enter(pane)
             }
         }
     }

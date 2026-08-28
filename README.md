@@ -36,6 +36,35 @@ MacPulse AI 是一款开源、免费、原生（Swift + SwiftUI，零第三方�
   <em>状态页：顶部四张大读数卡先给结论，下方实时进程表读出 <code>node</code> 的真实瞬时 168.4%（多核累加，非生命周期均值）。图中 <code>ecosystemd</code> 带红色 AI 角标并被置顶——那是 AI 在右侧报告里点名的进程，但终止动作仍需你点确认卡</em>
 </p>
 
+### 六界一览
+
+每一页只做一件事，进去之前先说清楚「读什么、会改什么」。
+
+<table>
+<tr>
+<td width="50%"><a href="docs/shot-status.jpg"><img src="docs/shot-status.jpg" alt="状态页"></a><br>
+<b>火 · 朱雀 —— 状态</b><br><sub>四张大读数卡先给结论，下面是瞬时 CPU 进程表。AI 点名的进程标红置顶，终止仍需确认。</sub></td>
+<td width="50%"><a href="docs/shot-clean.jpg"><img src="docs/shot-clean.jpg" alt="清理页"></a><br>
+<b>金 · 白虎 —— 清理</b><br><sub>只列可再生的缓存与历史版本包，逐项可勾。全部移入废纸篓，可恢复。</sub></td>
+</tr>
+<tr>
+<td><a href="docs/shot-software.jpg"><img src="docs/shot-software.jpg" alt="软件页"></a><br>
+<b>木 · 青龙 —— 软件</b><br><sub>已装应用与启动项同页管理，卸载前先扫 13 类残留。</sub></td>
+<td><a href="docs/shot-optimize.jpg"><img src="docs/shot-optimize.jpg" alt="优化页"></a><br>
+<b>土 · 麒麟 —— 优化</b><br><sub>每张维护卡片先讲清做什么、影响什么；跳过了也会说明为什么跳过。</sub></td>
+</tr>
+<tr>
+<td><a href="docs/shot-analyze.jpg"><img src="docs/shot-analyze.jpg" alt="分析页"></a><br>
+<b>水 · 玄武 —— 分析</b><br><sub>只读丈量目录大小，逐层下钻。删除仅限移入废纸篓。</sub></td>
+<td><a href="docs/shot-security.jpg"><img src="docs/shot-security.jpg" alt="安全页"></a><br>
+<b>門 · 门神 —— 安全</b><br><sub>剪贴板/端口/启动项本机体检，附安全钩子裁决日志。</sub></td>
+</tr>
+</table>
+
+> 右侧 AI 面板里那两张带虚线框的卡片就是 HITL：只读命令（`ps -p …`）自动执行并把输出回灌给模型，
+> 而「退出进程 node (PID 28169)」必须你点「确认执行」才会发生。
+
+
 ### 功能特性
 
 **📊 进程监控（Processes）**
@@ -124,6 +153,36 @@ swift test   # 90 个单元测试
   <br>
   <em>Status page: headline metric cards up top, live process table below reading <code>node</code> at a true instantaneous 168.4%. <code>ecosystemd</code> carries a red AI badge and is pinned to the top — the agent named it in the report on the right, but terminating it still needs you to click the confirmation card</em>
 </p>
+
+### The six realms
+
+Each page does one thing, and says up front what it reads and what it will change.
+
+<table>
+<tr>
+<td width="50%"><a href="docs/shot-status.jpg"><img src="docs/shot-status.jpg" alt="Status"></a><br>
+<b>Fire · Vermilion Bird — Status</b><br><sub>Headline metrics, then the instantaneous-CPU process table. Processes the AI names turn red and pin to the top; quitting still needs your click.</sub></td>
+<td width="50%"><a href="docs/shot-clean.jpg"><img src="docs/shot-clean.jpg" alt="Clean"></a><br>
+<b>Metal · White Tiger — Clean</b><br><sub>Only regenerable caches and legacy version bundles, itemised. Everything goes to the Trash.</sub></td>
+</tr>
+<tr>
+<td><a href="docs/shot-software.jpg"><img src="docs/shot-software.jpg" alt="Software"></a><br>
+<b>Wood · Azure Dragon — Software</b><br><sub>Installed apps and login items in one page; 13 leftover locations reviewed before uninstall.</sub></td>
+<td><a href="docs/shot-optimize.jpg"><img src="docs/shot-optimize.jpg" alt="Optimize"></a><br>
+<b>Earth · Qilin — Optimize</b><br><sub>Every maintenance card explains what it does and what it affects — and says why when it skips.</sub></td>
+</tr>
+<tr>
+<td><a href="docs/shot-analyze.jpg"><img src="docs/shot-analyze.jpg" alt="Analyze"></a><br>
+<b>Water · Black Tortoise — Analyze</b><br><sub>Read-only folder measurement, drill down level by level. Deletion is Trash-only.</sub></td>
+<td><a href="docs/shot-security.jpg"><img src="docs/shot-security.jpg" alt="Security"></a><br>
+<b>Gate · Door Gods — Security</b><br><sub>On-device clipboard/port/login-item audit, with the SafetyGuard journal.</sub></td>
+</tr>
+</table>
+
+> The two dashed cards in the AI panel are the human-in-the-loop gate: the read-only command
+> (`ps -p …`) auto-ran and fed its output back to the model, while "quit node (PID 28169)"
+> does nothing until you press Confirm.
+
 
 ### Feature Highlights
 
