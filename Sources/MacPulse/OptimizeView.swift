@@ -19,7 +19,7 @@ struct OptimizeView: View {
             }
             .padding(16)
         }
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Color.clear)
     }
 
     private var header: some View {

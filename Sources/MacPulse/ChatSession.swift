@@ -47,6 +47,8 @@ final class ChatSession: ObservableObject {
     @Published var draft = ""
 
     private var streamingTask: Task<Void, Never>?
+    /// 每次新开一轮流式 +1。被工具续答取消的旧 Task 不得再清 isStreaming / 删占位，否则 UI 会永远转圈。
+    private var streamEpoch: UInt64 = 0
     private weak var monitor: MonitorModel?
     private var store: SettingsStore?
     private var systemPrompt: String {
@@ -211,11 +213,18 @@ final class ChatSession: ObservableObject {
     }
 
     func stopStreaming() {
+        streamEpoch += 1
         streamingTask?.cancel()
+        isStreaming = false
+        if let last = messages.last, Self.isGhostAssistant(last) {
+            pruneEmptyAssistant(id: last.id, note: nil)
+        }
     }
 
     func clear() {
+        streamEpoch += 1
         streamingTask?.cancel()
+        isStreaming = false
         messages.removeAll()
         flaggedActions.removeAll()
         lastError = nil
@@ -461,33 +470,39 @@ final class ChatSession: ObservableObject {
     /// 流式一轮作答；结束后 finishAssistant 解析 HITL 动作与工具请求（可递归续答，depth 防循环）。
     private func streamInto(messages history: [LLMMessage], placeholderID: UUID, depth: Int) {
         guard let store else { return }
+        streamEpoch += 1
+        let epoch = streamEpoch
         isStreaming = true
 
         streamingTask?.cancel()
         streamingTask = Task { [weak self] in
+            guard let self else { return }
             do {
-                guard let self else { return }
                 let raw = try await LLMServiceFactory.service(for: store.settings.llmConfig())
                     .stream(messages: history) { delta in
                         Task { @MainActor [weak self] in
-                            guard let self, self.isStreaming else { return }
+                            guard let self, self.streamEpoch == epoch else { return }
                             self.appendToMessage(id: placeholderID, delta: delta)
                         }
                     }
+                guard self.streamEpoch == epoch else { return }
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(raw), depth: depth)
                 persist()
             } catch is CancellationError {
+                // 被工具续答替换：新一轮已经接管占位，这里什么都不做。
+                // 用户点停止：stopStreaming 已经 +epoch 并清了 isStreaming。
+                guard self.streamEpoch == epoch else { return }
                 finishAssistant(id: placeholderID, rawText: Self.normalizedModelOutput(collectPartial(id: placeholderID)))
-                // 用户主动中止：静默清掉空占位，不报“模型没返回内容”
                 pruneEmptyAssistant(id: placeholderID, note: nil)
             } catch {
-                if isStreaming {
-                    removeMessage(id: placeholderID)
-                    lastError = error.localizedDescription
-                }
+                guard self.streamEpoch == epoch else { return }
+                removeMessage(id: placeholderID)
+                lastError = error.localizedDescription
             }
-            isStreaming = false
-            persist()
+            if self.streamEpoch == epoch {
+                isStreaming = false
+                persist()
+            }
         }
     }
 

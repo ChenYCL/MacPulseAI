@@ -3,7 +3,7 @@ import SwiftUI
 /// 分析页（仿 Mole Analyze/木星）：目录大小钻取，双击进入子目录，面包屑回退。
 /// 本页只读测量；「移入废纸篓」带确认且可恢复。
 struct AnalyzeView: View {
-    @StateObject private var model = AnalyzeModel()
+    @ObservedObject var model: AnalyzeModel
     let onExplain: (_ summary: String) -> Void
     var body: some View {
         VStack(spacing: 0) {
@@ -34,7 +34,7 @@ struct AnalyzeView: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
-        .background(Color(nsColor: .controlBackgroundColor))
+        .background(Studio.surfaceMuted)
     }
 
     private var breadcrumb: some View {

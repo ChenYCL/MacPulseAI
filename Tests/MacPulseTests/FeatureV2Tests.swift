@@ -1,3 +1,4 @@
+import SwiftUI
 import XCTest
 @testable import MacPulse
 
@@ -222,6 +223,46 @@ final class FeatureV2Tests: XCTestCase {
 
     // MARK: 面板宽度拖拽
 
+    func testSystemLoadSnappedCollapsesSubTenthNoise() {
+        let a = SystemLoad(userPercent: 12.34, systemPercent: 3.21, idlePercent: 84.44)
+        let b = SystemLoad(userPercent: 12.31, systemPercent: 3.19, idlePercent: 84.41)
+        XCTAssertEqual(a.snapped(), b.snapped())
+        XCTAssertNotEqual(a, b)
+    }
+
+    func testMythAssetMissAndHitAreStable() {
+        XCTAssertNil(MythAsset.image("__macpulse_missing_art__"))
+        XCTAssertNil(MythAsset.image("__macpulse_missing_art__"), "miss 必须缓存，避免每帧扫盘")
+        if let first = MythAsset.image("fire") {
+            XCTAssertTrue(first === MythAsset.image("fire"), "命中必须返回同一 NSImage 实例")
+        }
+        // 随包发布的只有两类：圆形徽章（顶栏/HUD 头像）和去背立绘（选择台）。
+        // 暗底原画留在 art/ 不进 bundle——它只是 scripts/cutout.swift 的输入。
+        for pane in AppView.Pane.allCases {
+            let theme = WuXingTheme.theme(for: pane)
+            XCTAssertNotNil(MythAsset.image(theme.assetName),
+                            "圆形徽章 \(theme.assetName) 必须打进 bundle")
+            XCTAssertNotNil(MythAsset.image(theme.cutoutName),
+                            "去背立绘 \(theme.cutoutName) 必须打进 bundle")
+        }
+        XCTAssertNil(MythAsset.image("hero-fire"), "暗底原画不该随包发布")
+    }
+
+    /// 降采样桶缓存：同一档只解码缩放一次，且不会把图放大。
+    func testScaledAssetIsCachedAndNeverUpscales() {
+        guard let full = MythAsset.image("char-fire") else {
+            return XCTFail("char-fire 必须存在")
+        }
+        let small = MythAsset.image("char-fire", fitting: 128)
+        XCTAssertNotNil(small)
+        XCTAssertTrue(small === MythAsset.image("char-fire", fitting: 128), "同一档必须命中缓存")
+        XCTAssertLessThan(max(small!.size.width, small!.size.height),
+                          max(full.size.width, full.size.height),
+                          "128pt 档必须是降采样过的副本")
+        let huge = MythAsset.image("char-fire", fitting: 4096)
+        XCTAssertTrue(huge === full, "目标尺寸大于原图时直接返回原图，不做放大")
+    }
+
     func testPanelWidthClamp() {
         XCTAssertEqual(ChatPanel.clampedWidth(460), 460)
         XCTAssertEqual(ChatPanel.clampedWidth(100), ChatPanel.minWidth, "过窄时夹到最小宽度")
@@ -233,6 +274,33 @@ final class FeatureV2Tests: XCTestCase {
     // MARK: 空回复不得渲染成永久 loading
 
     /// 回归：流正常结束但模型没吐任何内容时，占位气泡会被当成「正在输出」而永远转圈。
+    /// 回归：stopStreaming 必须立刻放下 isStreaming，不能等网络 Task 自己结束，否则停止按钮后仍转圈。
+    @MainActor
+    func testClearWipesMessagesAndPersistsEmpty() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("chat_clear_\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let stored: [ChatSession.ChatMessage] = [
+            .init(sender: .user, content: "hello"),
+            .init(sender: .assistant, content: "world")
+        ]
+        try JSONEncoder().encode(stored).write(to: url)
+        let chat = ChatSession(historyURL: url)
+        XCTAssertEqual(chat.messages.count, 2)
+        chat.clear()
+        XCTAssertTrue(chat.messages.isEmpty)
+        XCTAssertFalse(chat.isStreaming)
+        let again = ChatSession(historyURL: url)
+        XCTAssertTrue(again.messages.isEmpty, "清空必须落盘，重启后不再出现")
+    }
+
+    @MainActor
+    func testStopStreamingClearsStreamingFlagWithoutWaitingForNetwork() {
+        let chat = ChatSession(historyURL: nil)
+        chat.stopStreaming()
+        XCTAssertFalse(chat.isStreaming)
+    }
+
     func testGhostAssistantDetection() {
         let ghost = ChatSession.ChatMessage(sender: .assistant, content: "")
         XCTAssertTrue(ChatSession.isGhostAssistant(ghost), "空 assistant 占位必须被识别为幽灵消息")
@@ -327,5 +395,17 @@ final class FeatureV2Tests: XCTestCase {
     func testFolderAISummaryContainsTopEntries() {
         let m = AnalyzeModel()
         XCTAssertFalse(m.aiSummary().isEmpty)
+    }
+
+    @MainActor
+    func testStudioChromeConstructs() {
+        let theme = WuXingTheme.theme(for: .status)
+        _ = StudioPanel { Text("x") }
+        _ = StudioBackdrop(theme: theme)
+        _ = BeastAvatar(theme: theme)
+        _ = RosterCard(theme: theme, paneTitle: "状态",
+                       stats: [CardStat(label: "CPU", value: "12%", ratio: 0.12)], selected: true)
+        XCTAssertEqual(theme.assetName, "fire")
+        XCTAssertEqual(theme.cutoutName, "char-fire")
     }
 }

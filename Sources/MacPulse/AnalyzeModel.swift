@@ -35,16 +35,20 @@ final class AnalyzeModel: ObservableObject {
     }
 
     private var scanTask: Task<Void, Never>?
+    private var scanGeneration: UInt64 = 0
 
     func rescan() {
         scanTask?.cancel()
+        scanGeneration += 1
+        let gen = scanGeneration
         let target = path
         isScanning = true
         errorText = nil
         scanTask = Task.detached(priority: .utility) { [weak self] in
             let result = Self.measure(target)
+            guard !Task.isCancelled else { return }
             await MainActor.run { [weak self] in
-                guard let self, !Task.isCancelled, self.path == target else { return }
+                guard let self, self.scanGeneration == gen, self.path == target else { return }
                 self.isScanning = false
                 switch result {
                 case .success(let entries):

@@ -10,6 +10,15 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp .build/release/MacPulse "$APP/Contents/MacOS/MacPulse"
 cp scripts/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+# 五行原画：扁平拷进 Resources，NSImage(named:) 与 MythAsset 都能找到
+if [ -d Sources/MacPulse/Resources ]; then
+  cp -f Sources/MacPulse/Resources/* "$APP/Contents/Resources/" 2>/dev/null || true
+fi
+# SPM resource bundle（swift run / 测试路径）
+if [ -d .build/release/MacPulse_MacPulse.bundle ]; then
+  rm -rf "$APP/Contents/Resources/MacPulse_MacPulse.bundle"
+  cp -R .build/release/MacPulse_MacPulse.bundle "$APP/Contents/Resources/"
+fi
 
 cat > "$APP/Contents/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>

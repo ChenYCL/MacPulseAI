@@ -29,7 +29,7 @@ struct PortView: View {
             Divider()
             list
         }
-        .onAppear(perform: rescan)
+        .onAppear { if entries.isEmpty && !isScanning { rescan() } }
     }
 
     private var toolbar: some View {

@@ -1,4 +1,28 @@
+import AppKit
 import SwiftUI
+
+/// 对话区滚动跟手：指针在面板上滚轮/触控板时解除「钉住底部」，避免流式 scrollTo 把人拽回去。
+final class ChatScrollStick: ObservableObject {
+    @Published var stickToBottom = true
+    var hovering = false
+    private var monitor: Any?
+
+    func start() {
+        guard monitor == nil else { return }
+        monitor = NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, self.hovering, self.stickToBottom else { return event }
+            DispatchQueue.main.async { [weak self] in self?.stickToBottom = false }
+            return event
+        }
+    }
+
+    func stop() {
+        if let monitor { NSEvent.removeMonitor(monitor) }
+        monitor = nil
+    }
+
+    deinit { stop() }
+}
 
 /// AI 对话面板：多轮消息流 + 输入框 + HITL 动作确认卡 + 模型来源角标。
 struct ChatPanel: View {
@@ -10,10 +34,13 @@ struct ChatPanel: View {
     /// Pin 常驻：开启后所有标签页显示、重启保持。
     var pinned: Bool = false
     var onTogglePin: (() -> Void)? = nil
+    var tint: Color = Color(red: 0.62, green: 0.42, blue: 0.95)
     @State private var dragStartWidth: CGFloat?
     @State private var handleHovering = false
     @State private var isDragging = false
     @State private var copied = false
+    @State private var confirmClear = false
+    @StateObject private var scrollStick = ChatScrollStick()
 
     static let defaultWidth: CGFloat = 460
     static let minWidth: CGFloat = 320
@@ -28,21 +55,23 @@ struct ChatPanel: View {
             dragHandle
             VStack(alignment: .leading, spacing: 0) {
                 header
-                    .background(
-                        LinearGradient(colors: [.purple.opacity(0.10), .purple.opacity(0.02)],
-                                       startPoint: .leading, endPoint: .trailing)
-                    )
-                Divider()
+                Rectangle().fill(Studio.hairline).frame(height: 1)
                 messages
-                Divider()
+                Rectangle().fill(Studio.hairline).frame(height: 1)
                 inputBar
-                    .background(Color(nsColor: .controlBackgroundColor))
+                    .background(Studio.surfaceMuted)
             }
             .frame(maxWidth: .infinity)
         }
         .frame(width: panelWidth)
-        .background(Color(nsColor: .textBackgroundColor))
-        .clipShape(RoundedRectangle(cornerRadius: 0))
+        .background(RoundedRectangle(cornerRadius: Studio.radiusPanel, style: .continuous)
+            .fill(Studio.surface))
+        .clipShape(RoundedRectangle(cornerRadius: Studio.radiusPanel, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: Studio.radiusPanel, style: .continuous)
+                .strokeBorder(Studio.hairline, lineWidth: 1)
+        )
+        .shadow(color: Studio.shadowSoft, radius: 14, y: 5)
         .transition(.move(edge: .trailing).combined(with: .opacity))
     }
 
@@ -87,11 +116,13 @@ struct ChatPanel: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "sparkles").foregroundColor(.purple)
-            Text(L10n.s("AI 对话", "AI Chat")).font(.headline)
+            Image(systemName: "sparkles").foregroundColor(tint)
+            Text(L10n.s("AI 对话", "AI Chat"))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundColor(Studio.ink)
             Text(endpointBadge)
                 .font(.caption2)
-                .foregroundColor(.secondary)
+                .foregroundColor(Studio.inkTertiary)
                 .lineLimit(1)
                 .truncationMode(.middle)
                 .help(L10n.s("当前请求将发送到此模型服务", "Requests are sent to this model service"))
@@ -104,7 +135,8 @@ struct ChatPanel: View {
                 }
                 .buttonStyle(.borderless)
                 .help(L10n.s("停止生成", "Stop generating"))
-            } else if !chat.messages.isEmpty {
+            }
+            if !chat.messages.isEmpty {
                 Button {
                     NSPasteboard.general.clearContents()
                     NSPasteboard.general.setString(
@@ -118,13 +150,20 @@ struct ChatPanel: View {
                 }
                 .buttonStyle(.borderless)
                 .help(L10n.s("复制对话", "Copy transcript"))
+                Button {
+                    confirmClear = true
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.borderless)
+                .help(L10n.s("清空对话记录", "Clear conversation"))
             }
             if let onTogglePin {
                 Button {
                     onTogglePin()
                 } label: {
                     Image(systemName: pinned ? "pin.fill" : "pin")
-                        .foregroundColor(pinned ? .purple : .secondary)
+                        .foregroundColor(pinned ? tint : Studio.inkTertiary)
                 }
                 .buttonStyle(.borderless)
                 .help(pinned ? L10n.s("已常驻（点击取消）", "Pinned (click to unpin)")
@@ -142,6 +181,17 @@ struct ChatPanel: View {
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 8)
+        .confirmationDialog(L10n.s("清空全部对话记录？", "Clear the entire conversation?"),
+                            isPresented: $confirmClear, titleVisibility: .visible) {
+            Button(L10n.s("清空记录", "Clear"), role: .destructive) {
+                chat.clear()
+                scrollStick.stickToBottom = true
+            }
+            Button(L10n.s("取消", "Cancel"), role: .cancel) {}
+        } message: {
+            Text(L10n.s("本地保存的对话会一并删除，无法撤销。",
+                        "Saved chat history will be deleted and cannot be undone."))
+        }
     }
 
     /// 模型来源角标：让用户一眼看出请求发往何处（避免与本地测试输出混淆）。
@@ -151,11 +201,16 @@ struct ChatPanel: View {
         return "\(cfg.model)@\(host)"
     }
 
+    /// 气泡可用宽度跟面板走，取整避免 GeometryReader 亚像素抖动把 Equatable 打穿、
+    /// 长 Markdown 表格反复重排（看起来像滚动卡死转圈）。
+    private var bubbleAvailableWidth: CGFloat {
+        max(260, (panelWidth - 9 - 24).rounded())
+    }
+
     private var messages: some View {
-        GeometryReader { geo in
         ScrollViewReader { proxy in
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 10) {
+                VStack(alignment: .leading, spacing: 10) {
                     if chat.messages.isEmpty {
                         Text(L10n.s("点击「AI 分析」或选中进程后「AI 解释」发起对话；也可以直接在下方输入问题，例如“哪个 node 进程可以终止？”\n\nAI 的终止建议需要你人工确认后才会执行。",
                                     "Click “AI Analyze” or select a process and click “Explain”; or just type below, e.g. “which node process can I kill?”\n\nTermination suggestions from AI require your explicit confirmation before they run."))
@@ -163,7 +218,7 @@ struct ChatPanel: View {
                     }
                     ForEach(chat.messages) { m in
                         MessageBubble(message: m,
-                                      availableWidth: geo.size.width,
+                                      availableWidth: bubbleAvailableWidth,
                                       isStreamingThis: chat.isStreaming && m.id == chat.messages.last?.id,
                                       onExecute: { chat.execute(action: $0, in: m.id) },
                                       onDismiss: { chat.dismiss(action: $0, in: m.id) })
@@ -174,19 +229,52 @@ struct ChatPanel: View {
                         Label(err, systemImage: "exclamationmark.triangle.fill")
                             .font(.callout).foregroundColor(.red)
                     }
+                    Color.clear.frame(height: 1).id("chat-bottom")
                 }
                 .padding(12)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
+            .onHover { scrollStick.hovering = $0 }
+            .onAppear { scrollStick.start() }
+            .onDisappear { scrollStick.stop() }
             .onChange(of: chat.messages.count) { _ in
-                withAnimation { proxy.scrollTo(chat.messages.last?.id, anchor: .bottom) }
+                jumpToLatestIfPinned(proxy)
             }
             .onChange(of: streamScrollTick) { _ in
-                // 仅在流式输出时跟随滚动；粒度按 chunk 而非逐 token，避免抢用户的滚动
-                guard chat.isStreaming else { return }
-                proxy.scrollTo(chat.messages.last?.id, anchor: .bottom)
+                jumpToLatestIfPinned(proxy)
+            }
+            .onChange(of: chat.isStreaming) { streaming in
+                if streaming { scrollStick.stickToBottom = true }
+            }
+            .overlay(alignment: .bottom) {
+                if !scrollStick.stickToBottom && !chat.messages.isEmpty {
+                    Button {
+                        scrollStick.stickToBottom = true
+                        var t = Transaction()
+                        t.disablesAnimations = true
+                        withTransaction(t) { proxy.scrollTo("chat-bottom", anchor: .bottom) }
+                    } label: {
+                        Label(L10n.s("跳到最新", "Jump to latest"), systemImage: "arrow.down")
+                            .font(.caption.weight(.medium))
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(Studio.surface))
+                            .overlay(Capsule().strokeBorder(Studio.hairlineStrong, lineWidth: 1))
+                            .shadow(color: Studio.shadowSoft, radius: 6, y: 2)
+                    }
+                    .buttonStyle(.plain)
+                    .padding(.bottom, 8)
+                    .help(L10n.s("你已离开底部；点此回到最新回复", "You scrolled away — click to follow the latest reply"))
+                }
             }
         }
-        }
+    }
+
+    private func jumpToLatestIfPinned(_ proxy: ScrollViewProxy) {
+        guard scrollStick.stickToBottom else { return }
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { proxy.scrollTo("chat-bottom", anchor: .bottom) }
     }
 
     /// 流式跟随滚动的节流刻度：每积累一段内容才推进一次，
@@ -238,7 +326,7 @@ struct MessageBubble: View, Equatable {
     static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
         lhs.message.id == rhs.message.id
             && lhs.message.content == rhs.message.content
-            && lhs.availableWidth == rhs.availableWidth
+            && lhs.availableWidth.rounded() == rhs.availableWidth.rounded()
             && lhs.isStreamingThis == rhs.isStreamingThis
             && lhs.message.actions.map(\.state) == rhs.message.actions.map(\.state)
             && lhs.message.actions.map(\.resultText) == rhs.message.actions.map(\.resultText)
@@ -260,23 +348,24 @@ struct MessageBubble: View, Equatable {
                     Image(systemName: "checkmark.seal.fill").font(.caption2)
                     Text(message.content).font(.caption)
                 }
-                .foregroundColor(.green)
+                .foregroundColor(Studio.success)
             case .toolResult:
                 HStack(spacing: 5) {
                     Image(systemName: "terminal.fill").font(.caption2)
                     Text(message.content).font(.caption)
                 }
-                .foregroundColor(.blue)
+                .foregroundColor(Studio.accent)
                 .frame(maxWidth: .infinity, alignment: .leading)
             case .user:
-                bubble(color: Color.accentColor.opacity(0.16), alignment: .trailing) {
+                bubble(color: Studio.accentSoft, alignment: .trailing) {
                     Text(message.content)
                         .font(.callout)
+                        .foregroundColor(Studio.ink)
                         .textSelection(.enabled)
                         .frame(maxWidth: .infinity, alignment: .trailing)
                 }
             case .assistant:
-                bubble(color: Color(nsColor: .controlBackgroundColor), alignment: .leading) {
+                bubble(color: Studio.surfaceMuted, alignment: .leading) {
                     if message.content.isEmpty {
                         if isStreamingThis {
                             HStack(spacing: 6) {
@@ -314,7 +403,7 @@ struct MessageBubble: View, Equatable {
                         .font(.caption2)
                         .foregroundColor(copied ? .green : .secondary)
                         .frame(width: 20, height: 20)
-                        .background(Circle().fill(Color(nsColor: .controlBackgroundColor)))
+                        .background(Circle().fill(Studio.surface))
                         .overlay(Circle().strokeBorder(Color.primary.opacity(0.1)))
                 }
                 .buttonStyle(.borderless)

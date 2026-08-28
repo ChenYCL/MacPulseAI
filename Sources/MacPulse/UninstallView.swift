@@ -2,7 +2,7 @@ import SwiftUI
 
 /// 应用卸载视图（磁盘页子标签）：选择应用 → 残留审查 → HITL 卸载（全部移入废纸篓）。
 struct AppUninstallView: View {
-    @StateObject private var model = UninstallModel()
+    @ObservedObject var model: UninstallModel
     @State private var includeLeftovers = true
     @State private var pendingApp: UninstallModel.Row?
 
@@ -12,7 +12,7 @@ struct AppUninstallView: View {
             Divider()
             list
         }
-        .onAppear { model.rescan() }
+        .onAppear { if model.rows.isEmpty && !model.isScanning { model.rescan() } }
     }
 
     private var toolbar: some View {
@@ -23,6 +23,7 @@ struct AppUninstallView: View {
             if let msg = model.lastMessage {
                 Text(msg).font(.caption).foregroundColor(.secondary).lineLimit(1)
             }
+            if model.isScanning { ProgressView().controlSize(.small) }
             Button(L10n.s("重新扫描", "Rescan")) { model.rescan() }.disabled(model.isScanning)
             Button(L10n.s("卸载并清理残留", "Uninstall & Clean Leftovers")) {
                 if let id = model.selectedRowID,
@@ -84,7 +85,7 @@ struct AppUninstallView: View {
             }
         }
         .overlay {
-            if model.isScanning {
+            if model.isScanning && model.rows.isEmpty {
                 ProgressView(L10n.s("正在扫描 /Applications…", "Scanning /Applications…"))
             }
         }

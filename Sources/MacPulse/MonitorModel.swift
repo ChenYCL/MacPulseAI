@@ -28,6 +28,11 @@ final class MonitorModel: ObservableObject {
     /// 窗口不可见时跳过 SwiftUI 表格刷新（渲染占大头），打开窗口立即补一次。
     /// 由 AppDelegate 依据 NSWindow.occlusionState 维护。
     private var isWindowVisible = true
+    /// 进程表是否真的在屏幕上。全量采样要 fork /bin/ps（实测 100ms+），
+    /// 停在选择台或别的模块时没人看这张表——降到 1/5 频率，只为卡面计数和
+    /// AI 快照留一份大致新鲜的 latestProcesses。非 @Published：改它不该触发重绘。
+    private var needsProcessDetail = true
+    private var skippedSampleTicks = 0
 
     nonisolated init(sampler: ProcessSampler = ProcessSampler()) {
         self.sampler = sampler
@@ -63,14 +68,24 @@ final class MonitorModel: ObservableObject {
         guard !isPaused else { return }
         // 这几项是 mach/sysctl 直接读取，微秒级，留在主线程无妨
         let l = loadTracker.current()
-        load = l
         onLoadUpdate?(l)
-        refreshMemoryStats()
+        // 窗口遮挡时菜单栏仍要数字，但不要发布 @Published 去重绘整棵 SwiftUI 树。
+        if isWindowVisible {
+            let snapped = l.snapped()
+            if snapped != load { load = snapped }
+            refreshMemoryStats()
+        }
 
         // 进程采样要 fork /bin/ps 并 waitUntilExit，实测 100ms+（系统负载高时更久）。
         // 放在主线程会周期性阻塞事件循环：⌘Q 恰好落进这段阻塞就会被系统判为
         // 「应用无响应」，用户只能强制退出。这里挪到串行后台队列，主线程只做发布。
         guard !isSampling else { return }   // 上一轮未返回则跳过本轮，避免任务堆积
+        // 还一份快照都没有时不许降频：卡面上的「进程 N」不能先给用户看十秒钟的 0。
+        if !needsProcessDetail, !latestProcesses.isEmpty {
+            skippedSampleTicks += 1
+            guard skippedSampleTicks >= 5 else { return }
+        }
+        skippedSampleTicks = 0
         isSampling = true
         let sampler = self.sampler
         samplingQueue.async { [weak self] in
@@ -107,7 +122,8 @@ final class MonitorModel: ObservableObject {
         if kr == KERN_SUCCESS {
             let usedBytes = Double(UInt64(stats.active_count) + UInt64(stats.wire_count)
                                    + UInt64(stats.compressor_page_count)) * Double(vm_page_size)
-            memoryUsedPercent = (usedBytes / Double(ProcessInfo.processInfo.physicalMemory) * 100 * 10).rounded() / 10
+            let pct = (usedBytes / Double(ProcessInfo.processInfo.physicalMemory) * 100 * 10).rounded() / 10
+            if memoryUsedPercent != pct { memoryUsedPercent = pct }
         }
 
         var buffer = [CChar](repeating: 0, count: 256)
@@ -115,17 +131,31 @@ final class MonitorModel: ObservableObject {
         guard sysctlbyname("vm.swapusage", &buffer, &sz, nil, 0) == 0 else { return }
         let raw = String(cString: buffer) // e.g. "total = 1024.00M used = 512.00M free = 512.00M"
         guard let range = raw.range(of: #"used\s*=\s*([\d.]+\s*[MG])"#, options: .regularExpression) else {
-            swapUsedText = nil
+            if swapUsedText != nil { swapUsedText = nil }
             return
         }
-        swapUsedText = String(raw[range])
+        let text = String(raw[range])
             .components(separatedBy: "=").last?
             .trimmingCharacters(in: .whitespaces)
+        if swapUsedText != text { swapUsedText = text }
     }
 
     func setWindowVisible(_ visible: Bool) {
+        let appeared = visible && !isWindowVisible
         isWindowVisible = visible
-        if visible { processes = latestProcesses }
+        guard appeared else { return }
+        processes = latestProcesses
+        let snapped = loadTracker.current().snapped()
+        if snapped != load { load = snapped }
+        refreshMemoryStats()
+    }
+
+    /// 进程表上屏 / 下屏。切回来时立刻补一次全量采样，别让用户先看到一张过期的表。
+    func setProcessDetailNeeded(_ needed: Bool) {
+        guard needed != needsProcessDetail else { return }
+        needsProcessDetail = needed
+        skippedSampleTicks = 0
+        if needed { tick() }
     }
 
     /// 批量终止；结果写入 statusMessage。普通退出（SIGTERM）3 秒后复查，仍存活则提示可强制退出。

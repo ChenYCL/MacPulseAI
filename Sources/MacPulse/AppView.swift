@@ -17,7 +17,11 @@ struct AppView: View {
     /// Pin 常驻：开启后 AI 对话面板在所有标签页显示，且重启后保持打开。
     @AppStorage("aiPanelPinned") private var aiPanelPinned = false
     @StateObject private var disk = DiskModel()
-    @State private var activePane: Pane = .status
+    @StateObject private var uninstallModel = UninstallModel()
+    /// 当前工作页；nil = 停在选择台。
+    @State private var activePane: Pane?
+    /// 选择台封面流的选中页（可以预览还没进入的页）。
+    @State private var previewPane: Pane = .status
 
     /// 仿 Mole 的行星导航：每页只做一件事，并事先声明检查什么/会改动什么。
     enum Pane: String, CaseIterable, Identifiable {
@@ -34,26 +38,7 @@ struct AppView: View {
             case .security: return L10n.s("安全", "Security")
             }
         }
-        var icon: String {
-            switch self {
-            case .status: return "sun.max.fill"          // 太阳
-            case .clean: return "globe.asia.australia.fill" // 地球
-            case .software: return "square.grid.2x2.fill"   // 火星·应用
-            case .optimize: return "speedometer"            // 水星
-            case .analyze: return "chart.pie.fill"          // 木星
-            case .security: return "shield.fill"            // 盾
-            }
-        }
-        var tint: Color {
-            switch self {
-            case .status: return .yellow
-            case .clean: return .green
-            case .software: return .orange
-            case .optimize: return .purple
-            case .analyze: return .blue
-            case .security: return .red
-            }
-        }
+
         /// Mole 式安全声明：检查什么，会改动什么。
         var safetyStatement: String {
             switch self {
@@ -71,6 +56,54 @@ struct AppView: View {
                                           "On-device clipboard/port/startup audit; AI analysis sends redacted content.")
             }
         }
+
+        /// 能力点：本页具备的能力/约束说明。
+        var skills: [SkillSpec] {
+            switch self {
+            case .status:
+                return [
+                    SkillSpec(icon: "eye", title: L10n.s("实时只读采样", "Live read-only sampling")),
+                    SkillSpec(icon: "person.badge.shield.checkmark", title: L10n.s("终止前逐项确认", "Per-item confirm before quit")),
+                    SkillSpec(icon: "sparkles.rectangle.stack", title: L10n.s("AI 解释进程", "AI explains processes")),
+                    SkillSpec(icon: "doc.on.doc", title: L10n.s("导出进程信息", "Export process info"))
+                ]
+            case .clean:
+                return [
+                    SkillSpec(icon: "trash", title: L10n.s("移入废纸篓可恢复", "Trash = restorable")),
+                    SkillSpec(icon: "arrow.triangle.2.circlepath", title: L10n.s("只列可再生缓存", "Regenerable caches only")),
+                    SkillSpec(icon: "exclamationmark.shield", title: L10n.s("存疑项先问再动", "Asks before touching")),
+                    SkillSpec(icon: "sparkles", title: L10n.s("AI 评估清理项", "AI reviews items"))
+                ]
+            case .software:
+                return [
+                    SkillSpec(icon: "app.badge", title: L10n.s("应用与启动项清单", "Apps & login items")),
+                    SkillSpec(icon: "magnifyingglass", title: L10n.s("残留文件扫描", "Leftover scan")),
+                    SkillSpec(icon: "trash", title: L10n.s("卸载进废纸篓", "Uninstall via Trash")),
+                    SkillSpec(icon: "sparkles", title: L10n.s("AI 审查精简建议", "AI slimming advice"))
+                ]
+            case .optimize:
+                return [
+                    SkillSpec(icon: "checkmark.seal", title: L10n.s("维护前逐项说明", "Explains before running")),
+                    SkillSpec(icon: "wrench.and.screwdriver", title: L10n.s("标准维护命令", "Standard maintenance")),
+                    SkillSpec(icon: "clock.arrow.circlepath", title: L10n.s("维护可随时中断", "Interruptible")),
+                    SkillSpec(icon: "sparkles", title: L10n.s("AI 按状态建议", "AI state-aware advice"))
+                ]
+            case .analyze:
+                return [
+                    SkillSpec(icon: "ruler", title: L10n.s("只读丈量磁盘", "Read-only measuring")),
+                    SkillSpec(icon: "folder.badge.gearshape", title: L10n.s("逐层下钻目录", "Drill into folders")),
+                    SkillSpec(icon: "trash", title: L10n.s("删除仅进废纸篓", "Trash-only deletion")),
+                    SkillSpec(icon: "sparkles", title: L10n.s("AI 解读空间去向", "AI interprets usage"))
+                ]
+            case .security:
+                return [
+                    SkillSpec(icon: "shield", title: L10n.s("本机体检不发外网", "On-device audit")),
+                    SkillSpec(icon: "clipboard", title: L10n.s("剪贴板脱敏", "Redacted clipboard")),
+                    SkillSpec(icon: "network", title: L10n.s("端口监听清单", "Port inventory")),
+                    SkillSpec(icon: "sparkles", title: L10n.s("AI 恶意内容审查", "AI content review"))
+                ]
+            }
+        }
     }
 
     @StateObject private var analyzeModel = AnalyzeModel()
@@ -82,35 +115,163 @@ struct AppView: View {
                 set: { chatPanelWidth = Double($0) })
     }
 
-    private var panePicker: some View {
-        VStack(spacing: 0) {
-            Picker("", selection: $activePane) {
-                ForEach(Pane.allCases) { p in
-                    Label(p.title, systemImage: p.icon).tag(p)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(width: 470)
-            Text(activePane.safetyStatement)
-                .font(.caption2)
-                .foregroundColor(.secondary)
-                .frame(width: 640)
-                .lineLimit(1)
-        }
-        .padding(.horizontal, 12)
-        .padding(.vertical, 5)
+    private var currentTheme: WuXingTheme.Theme {
+        WuXingTheme.theme(for: activePane ?? previewPane)
     }
 
-    /// 统一的 AI 侧栏包装（所有行星页共用，Pin 常驻）。
+    /// 顶栏显示页：停在选择台时高亮「选择台」，否则高亮当前工作页。
+    private var navPane: Pane { activePane ?? previewPane }
+
+    /// 封面流每张卡上的四行属性：跟该界自己的数据走，不是当前选中页的拷贝。
+    private func cardStats(for pane: Pane) -> [CardStat] {
+        let cpu = model.load.totalPercent
+        let mem = model.memoryUsedPercent
+        switch pane {
+        case .status:
+            return [
+                CardStat(label: L10n.s("负载", "CPU"), value: String(format: "%.0f%%", cpu), ratio: cpu / 100),
+                CardStat(label: L10n.s("用户", "USER"), value: String(format: "%.0f%%", model.load.userPercent), ratio: model.load.userPercent / 100),
+                CardStat(label: L10n.s("内存", "MEM"), value: mem.map { String(format: "%.0f%%", $0) } ?? "--", ratio: mem.map { $0 / 100 }),
+                CardStat(label: L10n.s("进程", "PROCS"), value: "\(model.processes.count)")
+            ]
+        case .clean:
+            let gb = Double(disk.totalCleanableBytes) / 1_073_741_824
+            return [
+                CardStat(label: L10n.s("可清", "JUNK"), value: AppMemoryFormatter.gigabytes(disk.totalCleanableBytes), ratio: min(1, gb / 4)),
+                CardStat(label: L10n.s("项数", "ITEMS"), value: "\(disk.items.count)"),
+                CardStat(label: L10n.s("剩余", "FREE"), value: disk.freeBytesText),
+                CardStat(label: L10n.s("扫描", "SCAN"), value: disk.isScanning ? L10n.s("进行中", "LIVE") : L10n.s("就绪", "READY"))
+            ]
+        case .software:
+            return [
+                CardStat(label: L10n.s("应用", "APPS"), value: "\(uninstallModel.rows.count)"),
+                CardStat(label: L10n.s("扫描", "SCAN"), value: uninstallModel.isScanning ? L10n.s("进行中", "LIVE") : L10n.s("就绪", "READY")),
+                CardStat(label: L10n.s("选定", "PICK"), value: uninstallModel.selectedRowID == nil ? "—" : "1"),
+                CardStat(label: L10n.s("处置", "ACT"), value: L10n.s("废纸篓", "TRASH"))
+            ]
+        case .optimize:
+            return [
+                CardStat(label: L10n.s("空闲", "IDLE"), value: String(format: "%.0f%%", model.load.idlePercent), ratio: model.load.idlePercent / 100),
+                CardStat(label: L10n.s("负载", "CPU"), value: String(format: "%.0f%%", cpu), ratio: cpu / 100),
+                CardStat(label: L10n.s("内存", "MEM"), value: mem.map { String(format: "%.0f%%", $0) } ?? "--", ratio: mem.map { $0 / 100 }),
+                CardStat(label: L10n.s("磁盘", "DISK"), value: disk.freeBytesText)
+            ]
+        case .analyze:
+            return [
+                CardStat(label: L10n.s("条目", "ROWS"), value: "\(analyzeModel.entries.count)"),
+                CardStat(label: L10n.s("合计", "TOTAL"), value: AppMemoryFormatter.gigabytes(analyzeModel.totalBytes)),
+                CardStat(label: L10n.s("扫描", "SCAN"), value: analyzeModel.isScanning ? L10n.s("进行中", "LIVE") : L10n.s("就绪", "READY")),
+                CardStat(label: L10n.s("路径", "PATH"), value: L10n.s("家目录", "HOME"))
+            ]
+        case .security:
+            return [
+                CardStat(label: L10n.s("守卫", "GUARD"), value: L10n.s("就位", "READY")),
+                CardStat(label: L10n.s("体检", "AUDIT"), value: L10n.s("本机", "LOCAL")),
+                CardStat(label: L10n.s("端口", "PORT"), value: L10n.s("监听", "LISTEN")),
+                CardStat(label: L10n.s("确认", "HITL"), value: L10n.s("必问", "ASK"))
+            ]
+        }
+    }
+
+    /// 装备槽：从选择台直达各页的四个常用动作。
+    /// 前两格是本界特有的实际动作，后两格固定为「进工作台」和「叫 AI」。
+    private func loadout(for pane: Pane) -> [QuickSlot] {
+        let enterSlot = QuickSlot(icon: "arrow.right.circle",
+                                  title: L10n.s("进入「\(pane.title)」工作台", "Open the \(pane.title) workspace"),
+                                  action: { enter(pane) })
+        let aiSlot = QuickSlot(icon: "sparkles",
+                               title: analyzeButtonTitle,
+                               enabled: !chat.isStreaming,
+                               action: { runAnalysis() })
+        switch pane {
+        case .status:
+            return [
+                QuickSlot(icon: "arrow.clockwise",
+                          title: L10n.s("立即采样一次", "Sample now"),
+                          enabled: !model.isPaused,
+                          action: { model.tick() }),
+                QuickSlot(icon: model.isPaused ? "play.fill" : "pause.fill",
+                          title: model.isPaused ? L10n.s("继续刷新", "Resume refreshing")
+                                                : L10n.s("暂停刷新", "Pause refreshing"),
+                          action: { model.isPaused.toggle() }),
+                enterSlot, aiSlot
+            ]
+        case .clean:
+            return [
+                QuickSlot(icon: "magnifyingglass",
+                          title: disk.isScanning ? L10n.s("扫描中…", "Scanning…")
+                                                 : L10n.s("扫描可清理项", "Scan for junk"),
+                          enabled: !disk.isScanning,
+                          action: { disk.rescan() }),
+                QuickSlot(icon: "checklist",
+                          title: L10n.s("全选扫描结果", "Select everything found"),
+                          enabled: !disk.items.isEmpty,
+                          action: { disk.selectedIDs = Set(disk.items.map(\.id)) }),
+                enterSlot, aiSlot
+            ]
+        case .software:
+            return [
+                QuickSlot(icon: "arrow.clockwise",
+                          title: uninstallModel.isScanning ? L10n.s("清点中…", "Scanning…")
+                                                           : L10n.s("清点已装应用", "Inventory installed apps"),
+                          enabled: !uninstallModel.isScanning,
+                          action: { uninstallModel.rescan() }),
+                QuickSlot(icon: "folder",
+                          title: L10n.s("打开「应用程序」文件夹", "Open the Applications folder"),
+                          action: {
+                              NSWorkspace.shared.open(URL(fileURLWithPath: "/Applications"))
+                          }),
+                enterSlot, aiSlot
+            ]
+        case .optimize:
+            return [
+                QuickSlot(icon: "externaldrive",
+                          title: L10n.s("刷新磁盘可用空间", "Refresh free space"),
+                          action: { disk.refreshFreeBytes() }),
+                QuickSlot(icon: "trash",
+                          title: L10n.s("打开废纸篓", "Open the Trash"),
+                          action: {
+                              NSWorkspace.shared.open(FileManager.default
+                                  .homeDirectoryForCurrentUser.appendingPathComponent(".Trash"))
+                          }),
+                enterSlot, aiSlot
+            ]
+        case .analyze:
+            return [
+                QuickSlot(icon: "ruler",
+                          title: analyzeModel.isScanning ? L10n.s("丈量中…", "Measuring…")
+                                                         : L10n.s("丈量当前目录", "Measure current folder"),
+                          enabled: !analyzeModel.isScanning,
+                          action: { analyzeModel.rescan() }),
+                QuickSlot(icon: "arrow.up.left",
+                          title: L10n.s("回到上一层目录", "Go up one folder"),
+                          enabled: analyzeModel.parentPath != nil && !analyzeModel.isScanning,
+                          action: { analyzeModel.goUp() }),
+                enterSlot, aiSlot
+            ]
+        case .security:
+            return [
+                QuickSlot(icon: "shield.lefthalf.filled",
+                          title: L10n.s("开始本机安全体检", "Run the on-device audit"),
+                          action: { enter(.security) }),
+                QuickSlot(icon: "network",
+                          title: L10n.s("查看端口监听", "Inspect listening ports"),
+                          action: { enter(.security) }),
+                enterSlot, aiSlot
+            ]
+        }
+    }
+
+    /// 统一的 AI 侧栏包装（所有工作页共用，Pin 常驻）。
     @ViewBuilder
     private func chatPanelIfVisible() -> some View {
         if chatVisible {
-            Divider()
             ChatPanel(chat: chat, configProvider: { store.settings.llmConfig() },
                       onClose: { showAIPanel = false },
                       panelWidth: panelWidthBinding,
                       pinned: aiPanelPinned,
-                      onTogglePin: { aiPanelPinned.toggle() })
+                      onTogglePin: { aiPanelPinned.toggle() },
+                      tint: currentTheme.primary)
         }
     }
 
@@ -126,7 +287,6 @@ struct AppView: View {
 
     private var filteredProcesses: [ProcSample] {
         let q = searchText.trimmingCharacters(in: .whitespaces)
-        let flagFirst = activePane == .status && showAIPanel
         let (top, rest) = sortedByFlagThenOrder
 
         func filter(_ list: [ProcSample]) -> [ProcSample] {
@@ -138,79 +298,41 @@ struct AppView: View {
             }
         }
 
-        let base = filter(top) + filter(rest)
-        return base
+        return filter(top) + filter(rest)
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            header
-            Divider()
-            panePicker
-            Divider()
-            switch activePane {
-            case .status:
-                HStack(spacing: 0) {
-                    table
-                    chatPanelIfVisible()
+        ZStack {
+            StudioBackdrop(theme: currentTheme,
+                           lightCenter: activePane == nil ? UnitPoint(x: 0.68, y: 0.42) : .center)
+            VStack(spacing: 0) {
+                TopNavBar(stat: StatValue(model.load),
+                          memPercent: model.memoryUsedPercent,
+                          isPaused: model.isPaused,
+                          theme: currentTheme,
+                          onRoster: activePane == nil,
+                          activePane: navPane,
+                          onSelectRoster: { exitToRoster() },
+                          onSelectPane: { pane in
+                              // 走 enter：顺带触发该页的首次懒扫描，
+                              // 否则从导航直接跳过去会看到一张空表。
+                              previewPane = pane
+                              enter(pane)
+                          },
+                          onPause: { model.isPaused.toggle() },
+                          onSettings: { showSettings = true })
+                if activePane == nil {
+                    rosterScreen
+                } else {
+                    workspace
                 }
-                Divider()
-                actionBar
-            case .clean:
-                HStack(spacing: 0) {
-                    CleanView(disk: disk, needsConfirm: disk.pendingNeeds,
-                              onConfirmNeeds: { disk.confirmPendingNeeds() },
-                              onDismissNeeds: { disk.dismissPendingNeeds() })
-                    chatPanelIfVisible()
-                }
-            case .software:
-                HStack(spacing: 0) {
-                    SoftwareView()
-                    chatPanelIfVisible()
-                }
-            case .optimize:
-                HStack(spacing: 0) {
-                    OptimizeView(disk: disk)
-                    chatPanelIfVisible()
-                }
-            case .analyze:
-                HStack(spacing: 0) {
-                    AnalyzeView(onExplain: { summary in
-                        ensureChatConfigured()
-                        showAIPanel = true
-                        chat.startFolderAnalysis(summary: summary)
-                    })
-                    chatPanelIfVisible()
-                }
-            case .security:
-                HStack(spacing: 0) {
-                    SecurityView(chat: chat, monitor: model,
-                                 configProvider: { store.settings.llmConfig() },
-                                 onAnalyze: {
-                                     ensureChatConfigured()
-                                     showAIPanel = true
-                                     chat.startSecurityAudit()
-                                 },
-                                 onOpenChat: { ensureChatConfigured(); showAIPanel = true })
-                    chatPanelIfVisible()
-                }
-            }
-            if let msg = model.statusMessage, activePane == .status {
-                Divider()
-                HStack(spacing: 6) {
-                    Image(systemName: "info.circle.fill").foregroundColor(.blue)
-                    Text(msg).font(.caption).foregroundColor(.secondary)
-                    Spacer()
-                }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 4)
-                .background(Color(nsColor: .controlBackgroundColor))
-                .textSelection(.enabled)
             }
         }
-        .frame(minWidth: 980, minHeight: 600)
-        .animation(.easeInOut(duration: 0.18), value: activePane)
-        .animation(.easeInOut(duration: 0.18), value: chatVisible)
+        .frame(minWidth: 1100, minHeight: 680)
+        .preferredColorScheme(.light)
+        // 这里不要挂 .animation(value: activePane / chatVisible)：
+        // 根节点上的隐式动画会把整棵树（上千行的进程表、Markdown 报告、立绘）
+        // 一起做补间——切标签时那一下卡顿和残影就是它。切页是瞬时的。
         .sheet(isPresented: $showSettings) {
             SettingsSheet(store: store)
                 .onDisappear {
@@ -222,131 +344,183 @@ struct AppView: View {
             model.apply(settings: store.settings)
             L10n.overrideCode = store.settings.uiLanguage
             selection.removeAll()
+            model.setProcessDetailNeeded(activePane == .status)
             disk.runningPathsProvider = { Set(model.latestProcesses.map(\.path)) }
+            uninstallModel.runningPathsProvider = { Set(model.latestProcesses.map(\.path)) }
             if !chatConfigured {
                 chat.configure(monitor: model, store: store)
                 chat.setDiskModel(disk)
                 chatConfigured = true
             }
         }
+        .onChange(of: activePane) { pane in
+            // 只有进程表真的在屏幕上时才每拍 fork 一次 ps。
+            model.setProcessDetailNeeded(pane == .status)
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .macPulseRevealPane)) { note in
+            if let raw = note.object as? String, let pane = Pane(rawValue: raw) {
+                previewPane = pane
+                activePane = pane
+            }
+        }
     }
 
-    // MARK: 顶部工具栏
+    // MARK: 选择台
 
-    private var header: some View {
-        HeaderView(load: model.load,
-                   memPercent: model.memoryUsedPercent,
-                   swapText: model.swapUsedText,
-                   isPaused: model.isPaused,
-                   analyzeTitle: analyzeButtonTitle,
-                   analyzeHelp: analyzeHelp,
-                   analyzeDisabled: analyzeDisabled,
-                   refreshInterval: $model.refreshInterval,
-                   onAnalyze: { runAnalysis() },
-                   onPause: { model.isPaused.toggle() },
-                   onSettings: { showSettings = true })
+    private var rosterScreen: some View {
+        RosterScreen(selection: $previewPane,
+                     statsFor: cardStats(for:),
+                     loadoutFor: loadout(for:),
+                     skillsFor: { $0.skills },
+                     onEnter: { enter(previewPane) },
+                     onAnalyze: { runAnalysis() },
+                     onSettings: { showSettings = true },
+                     analyzeTitle: analyzeButtonTitle,
+                     analyzeDisabled: analyzeDisabled)
+            .padding(.top, 12)
     }
-    // MARK: 进程表
 
-    private var table: some View {
-        Table(filteredProcesses, selection: $selection, sortOrder: $sortOrder) {
-            TableColumn(L10n.s("进程", "Process"), value: \.name) { p in procCell(p) }
-                .width(min: 240, ideal: 360)
-            TableColumn("%CPU", value: \.cpuPercent) { p in
-                HStack(spacing: 6) {
-                    Text(String(format: "%.1f", p.cpuPercent))
-                        .monospacedDigit()
-                        .foregroundColor(cpuColor(p.cpuPercent))
-                        .fontWeight(p.cpuPercent >= store.settings.cpuHighlightThreshold ? .bold : .regular)
-                        .frame(width: 44, alignment: .trailing)
-                    cpuBar(p.cpuPercent)
+    // MARK: 工作页
+
+    private var workspace: some View {
+        VStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 12) {
+                StudioPanel {
+                    VStack(spacing: 0) {
+                        moduleStrip
+                        Rectangle().fill(Studio.hairline).frame(height: 1)
+                        pageBody
+                    }
                 }
-                .frame(maxWidth: .infinity, alignment: .trailing)
+                chatPanelIfVisible()
             }
-            .width(min: 110, ideal: 140)
-            TableColumn(L10n.s("内存", "Memory"), value: \.rssBytes) { p in
-                Text(Self.memoryString(p.rssBytes))
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .width(min: 80, ideal: 100)
-            TableColumn(L10n.s("线程", "Threads"), value: \.threads) { p in
-                Text(p.threads > 0 ? "\(p.threads)" : "—")
-                    .foregroundColor(p.threads > 0 ? .primary : .secondary)
-                    .frame(maxWidth: .infinity, alignment: .trailing)
-            }
-            .width(min: 50, ideal: 60)
-            TableColumn(L10n.s("用户", "User"), value: \.user)
-                .width(min: 60, ideal: 90)
-            TableColumn("PID", value: \.pid) { p in
-                // verbatim：PID 是标识符不是数量，不能被本地化成 “31,823”
-                Text(verbatim: String(p.pid)).monospacedDigit()
-            }
-            .width(min: 60, ideal: 80)
-        }
-        .overlay {
-            if model.processes.isEmpty {
-                Text(L10n.s("正在采样…", "Sampling…")).foregroundColor(.secondary)
+            .padding(.horizontal, 14)
+            .padding(.top, 4)
+            .padding(.bottom, 12)
+            if let msg = model.statusMessage, activePane == .status {
+                HStack(spacing: 6) {
+                    Image(systemName: "info.circle.fill").foregroundColor(currentTheme.primary)
+                    Text(msg).font(.caption).foregroundColor(Studio.inkSecondary)
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 6)
+                .background(Studio.surface)
+                .overlay(alignment: .top) { Rectangle().fill(Studio.hairline).frame(height: 1) }
+                .textSelection(.enabled)
             }
         }
+    }
+
+    /// 工作台页眉：接住选择台的角色感——头像 + 神兽名 + 本页安全声明 + 本页动作。
+    private var moduleStrip: some View {
+        let theme = currentTheme
+        return HStack(spacing: 10) {
+            BeastAvatar(theme: theme, size: 30)
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 7) {
+                    Text(theme.beast)
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(Studio.ink)
+                    Text("\(theme.element) · \(navPane.title)")
+                        .font(Studio.microLabel(9))
+                        .tracking(1.0)
+                        .foregroundColor(theme.primary)
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(theme.soft))
+                }
+                Text(navPane.safetyStatement)
+                    .font(.system(size: 10))
+                    .foregroundColor(Studio.inkTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            Spacer(minLength: 8)
+            if navPane == .status {
+                Picker("", selection: $model.refreshInterval) {
+                    ForEach([1.0, 2.0, 5.0], id: \.self) { v in
+                        Text(L10n.s(String(format: "%.0f 秒", v), String(format: "%.0fs", v))).tag(v)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .frame(width: 150)
+                .help(L10n.s("采样间隔", "Sampling interval"))
+            }
+            Button(analyzeButtonTitle) { runAnalysis() }
+                .buttonStyle(.studioPrimary(tint: theme.primary))
+                .disabled(analyzeDisabled)
+            Button(L10n.s("返回选择台", "Roster")) { exitToRoster() }
+                .buttonStyle(.studioSecondary)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+    }
+
+    private func enter(_ pane: Pane) {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { activePane = pane }
+        // 进入工作页时的首扫（懒触发，选择台阶段不扫盘）
+        switch pane {
+        case .clean: if disk.items.isEmpty && !disk.isScanning { disk.rescan() }
+        case .software: if uninstallModel.rows.isEmpty && !uninstallModel.isScanning { uninstallModel.rescan() }
+        case .analyze: if analyzeModel.entries.isEmpty && !analyzeModel.isScanning { analyzeModel.rescan() }
+        default: break
+        }
+    }
+
+    private func exitToRoster() {
+        var t = Transaction()
+        t.disablesAnimations = true
+        withTransaction(t) { activePane = nil }
     }
 
     @ViewBuilder
-    private func procCell(_ p: ProcSample) -> some View {
-        let isFlagged = flaggedPIDs.contains(p.pid)
-        VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: 6) {
-                if p.state == "R" {
-                    Circle().fill(Color.orange).frame(width: 6, height: 6)
-                        .help(L10n.s("正在运行", "Running"))
-                }
-                Text(p.name)
-                    .fontWeight(.medium)
-                    .foregroundColor(isFlagged ? .red : .primary)
-                if isFlagged {
-                    Text("AI")
-                        .font(.caption2.bold())
-                        .foregroundColor(.white)
-                        .padding(.horizontal, 4)
-                        .padding(.vertical, 1)
-                        .background(Capsule().fill(Color.purple))
-                        .help(L10n.s("AI 建议终止——见右侧对话中的确认卡", "AI suggests terminating — see the confirmation card in the chat panel"))
-                }
+    private var pageBody: some View {
+        switch activePane ?? previewPane {
+        case .status:
+            VStack(spacing: 0) {
+                statusHeader
+                Rectangle().fill(Studio.hairline).frame(height: 1)
+                ProcessTable(processes: model.processes,
+                             flaggedPIDs: flaggedPIDs,
+                             searchText: searchText,
+                             coreCount: model.coreCount,
+                             highlightThreshold: store.settings.cpuHighlightThreshold,
+                             selection: $selection,
+                             sortOrder: $sortOrder)
+                    .equatable()
+                Rectangle().fill(Studio.hairline).frame(height: 1)
+                actionBar
             }
-            if !p.path.isEmpty, p.path != p.name {
-                Text(p.path)
-                    .font(.caption2)
-                    .foregroundColor(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-            }
+        case .clean:
+            CleanView(disk: disk, needsConfirm: disk.pendingNeeds,
+                      onConfirmNeeds: { disk.confirmPendingNeeds() },
+                      onDismissNeeds: { disk.dismissPendingNeeds() })
+        case .software:
+            SoftwareView(uninstall: uninstallModel)
+        case .optimize:
+            OptimizeView(disk: disk)
+        case .analyze:
+            AnalyzeView(model: analyzeModel, onExplain: { summary in
+                ensureChatConfigured()
+                showAIPanel = true
+                chat.startFolderAnalysis(summary: summary)
+            })
+        case .security:
+            SecurityView(chat: chat, monitor: model,
+                         configProvider: { store.settings.llmConfig() },
+                         onAnalyze: {
+                             ensureChatConfigured()
+                             showAIPanel = true
+                             chat.startSecurityAudit()
+                         },
+                         onOpenChat: { ensureChatConfigured(); showAIPanel = true })
         }
-        .padding(.vertical, 2)
     }
 
-    /// CPU 迷你条：按核心占比绘制（多核 >100% 时满条高亮）。
-    private func cpuBar(_ cpu: Double) -> some View {
-        let ratio = min(cpu / (Double(model.coreCount) * 100), 1)
-        let singleCoreRatio = min(cpu / 100, 1)
-        let fillWidth = max(2, 44 * singleCoreRatio)
-        return ZStack(alignment: .leading) {
-            Capsule().fill(Color.primary.opacity(0.07))
-            Capsule()
-                .fill(cpuColor(cpu).opacity(0.85))
-                .frame(width: max(2, 44 * ratio))
-            if cpu >= 100 {
-                Capsule().strokeBorder(Color.red.opacity(0.5), lineWidth: 1)
-            }
-        }
-        .frame(width: 44, height: 5)
-        .help("\(String(format: "%.1f", cpu))% · \(Int(singleCoreRatio * 100))% of one core")
-        _ = fillWidth
-    }
-
-    private func cpuColor(_ cpu: Double) -> Color {
-        if cpu >= store.settings.cpuHighlightThreshold { return .red }
-        if cpu >= store.settings.cpuHighlightThreshold / 2 { return .orange }
-        return .primary
-    }
+    // MARK: 工具
 
     static func memoryString(_ bytes: Int64) -> String {
         let mb = Double(bytes) / 1_048_576
@@ -354,6 +528,44 @@ struct AppView: View {
         if mb >= 100 { return String(format: "%.0f MB", mb) }
         return String(format: "%.1f MB", mb)
     }
+
+    // MARK: 状态页读数行
+    /// 状态页顶部的大读数：先给结论（负载/内存/交换/进程数），再让人往下看明细表。
+    private var statusHeader: some View {
+        let mem = model.memoryUsedPercent
+        let cpu = model.load.totalPercent
+        return HStack(spacing: 10) {
+            MetricCard(title: L10n.s("负载", "CPU Load"),
+                       value: String(format: "%.0f", cpu), unit: "%",
+                       caption: String(format: L10n.s("用户 %.0f%% · 系统 %.0f%%", "user %.0f%% · sys %.0f%%"),
+                                       model.load.userPercent, model.load.systemPercent),
+                       ratio: cpu / 100,
+                       tint: cpu >= 80 ? Studio.danger : (cpu >= 50 ? Studio.warning : currentTheme.primary))
+                .equatable()
+            MetricCard(title: L10n.s("内存", "Memory"),
+                       value: mem.map { String(format: "%.0f", $0) } ?? "--", unit: mem == nil ? "" : "%",
+                       caption: model.swapUsedText.map { L10n.s("交换 \($0)", "swap \($0)") }
+                           ?? L10n.s("无换页压力", "no swap pressure"),
+                       ratio: mem.map { $0 / 100 },
+                       tint: (mem ?? 0) >= 85 ? Studio.danger : Studio.accent)
+                .equatable()
+            MetricCard(title: L10n.s("进程", "Processes"),
+                       value: "\(model.processes.count)",
+                       caption: L10n.s("\(model.coreCount) 核 · 每 \(Int(model.refreshInterval)) 秒采样",
+                                       "\(model.coreCount) cores · every \(Int(model.refreshInterval))s"),
+                       tint: Studio.success)
+                .equatable()
+            MetricCard(title: L10n.s("选中", "Selected"),
+                       value: selection.isEmpty ? "—" : "\(selection.count)",
+                       caption: selectionHint ?? L10n.s("选中后可退出 / 复制 / 让 AI 解释",
+                                                        "Quit, copy, or ask the AI"),
+                       tint: selection.isEmpty ? Studio.inkTertiary : currentTheme.primary)
+                .equatable()
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 12)
+    }
+
 
     // MARK: 底部操作栏
 
@@ -465,7 +677,7 @@ struct AppView: View {
     }
 
     private var analyzeButtonTitle: String {
-        switch activePane {
+        switch navPane {
         case .status: return L10n.s("AI 分析", "AI Analyze")
         case .clean: return L10n.s("AI 分析磁盘", "Analyze Disk")
         case .software: return L10n.s("AI 分析软件", "Review Software")
@@ -475,30 +687,13 @@ struct AppView: View {
         }
     }
 
-    private var analyzeHelp: String {
-        switch activePane {
-        case .status: return L10n.s("结合最新进程快照给出分析与终止建议（需确认）",
-                                    "Analyze the latest process snapshot (termination needs your confirmation)")
-        case .clean: return L10n.s("结合扫描结果评估可清理项（清理需确认）",
-                                   "Review scanned items (cleanup needs your confirmation)")
-        case .software: return L10n.s("让 AI 审查已装应用与启动项有无可精简项",
-                                      "Let the AI review installed apps and startup items")
-        case .optimize: return L10n.s("让 AI 基于当前状态建议维护动作",
-                                      "Let the AI suggest maintenance based on current state")
-        case .analyze: return L10n.s("把当前目录的测量摘要发给 AI 解读空间去向",
-                                     "Send the current folder measurement to the AI for interpretation")
-        case .security: return L10n.s("把脱敏后的剪贴板内容交给 AI 审查是否疑似恶意",
-                                      "Send the redacted clipboard to the AI for a malicious-content review")
-        }
-    }
-
     private var analyzeDisabled: Bool {
-        chat.isStreaming || (activePane == .status && model.processes.isEmpty)
+        chat.isStreaming || (activePane == nil && model.processes.isEmpty && navPane == .status)
     }
 
     private func runAnalysis() {
         ensureChatConfigured()
-        switch activePane {
+        switch navPane {
         case .status:
             showAIPanel = true
             chat.startAnalysis()

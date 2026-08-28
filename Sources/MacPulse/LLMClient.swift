@@ -151,7 +151,8 @@ final class OpenAIService: LLMServicing {
         guard let url = URL(string: base + "/chat/completions") else { throw LLMError.badURL(config.baseURL) }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = stream ? 600 : 60
+        // 非流式（设置里的「测试连接」、短问答）也可能落在慢网关/推理模型上，给到 5 分钟。
+        req.timeoutInterval = stream ? 600 : 300
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         if !config.apiKey.isEmpty {
             req.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
@@ -302,7 +303,8 @@ final class AnthropicService: LLMServicing {
         let url = try messagesURL()
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
-        req.timeoutInterval = stream ? 600 : 60
+        // 非流式（设置里的「测试连接」、短问答）也可能落在慢网关/推理模型上，给到 5 分钟。
+        req.timeoutInterval = stream ? 600 : 300
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         if !config.apiKey.isEmpty {

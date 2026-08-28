@@ -7,7 +7,8 @@ let package = Package(
     targets: [
         .executableTarget(
             name: "MacPulse",
-            path: "Sources/MacPulse"
+            path: "Sources/MacPulse",
+            resources: [.copy("Resources")]
         ),
         .testTarget(
             name: "MacPulseTests",

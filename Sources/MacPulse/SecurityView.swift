@@ -75,7 +75,7 @@ struct SecurityView: View {
                          onOpenChat: onOpenChat, monitor: monitor)
             }
         }
-        .onAppear { refresh() }
+        .onAppear { if lastCheck == nil { refresh() } }
         .onReceive(NotificationCenter.default.publisher(for: SafetyGuard.JournalChanged.name)) { _ in
             journal = SafetyGuard.journal
         }

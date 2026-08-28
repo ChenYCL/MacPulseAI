@@ -6,9 +6,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store = SettingsStore()
     var window: NSWindow?
     var statusItem: NSStatusItem?
+    var hudPopover: NSPopover?
+    var statusMenu: NSMenu?
     private var pauseMenuItem: NSMenuItem?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // 影棚亮色主题：中性画布 + 去背立绘
+        NSApp.appearance = NSAppearance(named: .aqua)
         setupMainMenu()
         L10n.overrideCode = store.settings.uiLanguage
         model.apply(settings: store.settings)
@@ -16,10 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.updateStatusItem(load: load)
         }
 
-        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1080, height: 660),
-                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
+        let win = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 1240, height: 800),
+                           styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
                            backing: .buffered, defer: false)
-        win.title = L10n.s("MacPulse AI — AI 进程管家", "MacPulse AI — AI Process Manager")
+        win.title = L10n.s("MacPulse AI — 五气朝元", "MacPulse AI — Five Elements")
+        win.titlebarAppearsTransparent = true
+        win.titleVisibility = .hidden
+        win.isMovableByWindowBackground = true
+        win.isOpaque = true
+        win.backgroundColor = NSColor(calibratedRed: 0.949, green: 0.957, blue: 0.965, alpha: 1)
+        win.minSize = NSSize(width: 1100, height: 740)
         win.contentView = NSHostingView(rootView: AppView(model: model, store: store))
         win.center()
         win.setFrameAutosaveName("MacPulseMain")
@@ -30,6 +40,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         setupStatusItem()
         model.start()
         NSApp.activate(ignoringOtherApps: true)
+        revealPaneFromLaunchArguments()
+    }
+
+    /// `--pane status|clean|software|optimize|analyze|security`
+    /// 直接落到某个工作页。给 scripts/sweep.sh 逐页截图用——
+    /// 用坐标点击顶栏在窗口一挪位置就全错，用启动参数才是可复现的。
+    private func revealPaneFromLaunchArguments() {
+        let args = ProcessInfo.processInfo.arguments
+        guard let i = args.firstIndex(of: "--pane"), i + 1 < args.count else { return }
+        let raw = args[i + 1]
+        guard AppView.Pane(rawValue: raw) != nil else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            NotificationCenter.default.post(name: .macPulseRevealPane, object: raw)
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
@@ -88,25 +112,74 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func setupStatusItem() {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
-        item.button?.title = "CPU --%"
+        if let seal = MythAsset.template("menubar-seal", pointSize: 18) {
+            item.button?.image = seal
+            item.button?.imagePosition = .imageLeading
+            item.button?.imageScaling = .scaleProportionallyDown
+        }
+        item.button?.title = " --%"
 
+        // 左键弹五行 HUD；右键传统菜单。不要挂 item.menu，否则左键会被菜单抢走。
         let menu = NSMenu()
         let openItem = NSMenuItem(title: L10n.s("打开 MacPulse AI", "Open MacPulse AI"),
                                   action: #selector(showMainWindow), keyEquivalent: "")
         openItem.target = self
         menu.addItem(openItem)
-
         let pause = NSMenuItem(title: L10n.s("暂停刷新", "Pause Refreshing"),
                                action: #selector(togglePause), keyEquivalent: "")
         pause.target = self
         menu.addItem(pause)
         pauseMenuItem = pause
-
         menu.addItem(.separator())
         menu.addItem(NSMenuItem(title: L10n.s("退出 MacPulse AI", "Quit MacPulse AI"),
                                 action: #selector(NSApplication.terminate(_:)), keyEquivalent: ""))
-        item.menu = menu
+        statusMenu = menu
+
+        let popover = NSPopover()
+        popover.behavior = .transient
+        popover.animates = true
+        popover.appearance = NSAppearance(named: .aqua)
+        let hud = MenuHUDView(model: model,
+                              disk: DiskModel.sharedForHUD,
+                              onOpenMainWindow: { [weak self] in
+                                  self?.hudPopover?.performClose(nil)
+                                  self?.showMainWindow()
+                              },
+                              onOpenPane: { [weak self] pane in
+                                  self?.hudPopover?.performClose(nil)
+                                  NotificationCenter.default.post(name: .macPulseRevealPane, object: pane.rawValue)
+                                  self?.showMainWindow()
+                              },
+                              onQuit: { NSApp.terminate(nil) })
+        let hosting = NSHostingController(rootView: hud)
+        hosting.sizingOptions = .preferredContentSize
+        popover.contentViewController = hosting
+        hudPopover = popover
+
+        item.button?.target = self
+        item.button?.action = #selector(statusItemClicked(_:))
+        item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
         statusItem = item
+    }
+
+    @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let item = statusItem, let event = NSApp.currentEvent else { return }
+        if event.type == .rightMouseUp {
+            statusMenu?.popUp(positioning: nil, at: NSPoint(x: 0, y: item.button!.bounds.maxY + 4),
+                              in: item.button!)
+        } else {
+            toggleHudPopover()
+        }
+    }
+
+    private func toggleHudPopover() {
+        guard let button = statusItem?.button else { return }
+        if let hud = hudPopover, hud.isShown {
+            hud.performClose(nil)
+        } else {
+            hudPopover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+            hudPopover?.contentViewController?.view.window?.makeKey()
+        }
     }
 
     @objc private func showMainWindow() {
@@ -124,7 +197,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     private func updateStatusItem(load: SystemLoad) {
         guard let button = statusItem?.button else { return }
-        let text = NSMutableAttributedString(string: String(format: "CPU %.0f%%", load.totalPercent))
+        let text = NSMutableAttributedString(string: String(format: " %.0f%%", load.totalPercent))
         let full = NSRange(location: 0, length: text.length)
         if load.totalPercent >= 80 {
             text.addAttribute(.foregroundColor, value: NSColor.systemRed, range: full)

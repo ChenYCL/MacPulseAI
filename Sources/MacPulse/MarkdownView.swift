@@ -167,7 +167,8 @@ struct MarkdownView: View, Equatable {
     var contentWidth: CGFloat = 420
 
     static func == (lhs: MarkdownView, rhs: MarkdownView) -> Bool {
-        lhs.markdown == rhs.markdown && lhs.contentWidth == rhs.contentWidth
+        lhs.markdown == rhs.markdown
+            && lhs.contentWidth.rounded() == rhs.contentWidth.rounded()
     }
 
     private static let cacheLock = NSLock()
@@ -178,8 +179,11 @@ struct MarkdownView: View, Equatable {
         defer { Self.cacheLock.unlock() }
         if let hit = Self.cache[markdown] { return hit }
         let parsed = MarkdownParser.parse(markdown)
-        if Self.cache.count > 60 { Self.cache.removeAll() }
-        Self.cache[markdown] = parsed
+        // 流式前缀每 token 一变：缓存大段会把内存顶满，且几乎不会再命中。
+        if markdown.utf8.count < 8_000 {
+            if Self.cache.count > 40 { Self.cache.removeAll(keepingCapacity: true) }
+            Self.cache[markdown] = parsed
+        }
         return parsed
     }
 

@@ -3,6 +3,7 @@ import SwiftUI
 /// 软件页（仿 Mole Software/火星）：应用卸载 + 启动项 同页管理。
 /// 卸载与移除一律移入废纸篓（可恢复）并经过 SafetyHook。
 struct SoftwareView: View {
+    @ObservedObject var uninstall: UninstallModel
     enum Segment: String, CaseIterable, Identifiable {
         case uninstall, startup
         var id: String { rawValue }
@@ -31,7 +32,7 @@ struct SoftwareView: View {
             Divider()
             switch segment {
             case .uninstall:
-                AppUninstallView()
+                AppUninstallView(model: uninstall)
             case .startup:
                 StartupItemsView()
             }
@@ -111,7 +112,7 @@ struct StartupItemsView: View {
             }
             .padding(16)
         }
-        .onAppear { rescan() }
+        .onAppear { if launchItems.isEmpty { rescan() } }
     }
 
     private func rescan() {

@@ -4,6 +4,9 @@ import Combine
 /// 磁盘管家状态机：扫描可清理类别 → 展示 → HITL 移入废纸篓。
 @MainActor
 final class DiskModel: ObservableObject {
+    /// 菜单栏 HUD 使用的共享实例（与主窗口各自实例，避免耦合其扫描状态）。
+    static let sharedForHUD = DiskModel()
+
     @Published private(set) var items: [DiskCleaner.Item] = []
     @Published private(set) var isScanning = false
     @Published private(set) var lastScanDate: Date?
@@ -33,10 +36,14 @@ final class DiskModel: ObservableObject {
         }
     }
 
+    private var scanGeneration: UInt64 = 0
+
     /// 后台全量扫描（大小计算是 IO 密集，放后台线程）。
     func rescan() {
         guard !isScanning else { return }
         isScanning = true
+        scanGeneration += 1
+        let gen = scanGeneration
         let home = self.home
         let running = runningPathsProvider()
         Task { [weak self] in
@@ -45,11 +52,12 @@ final class DiskModel: ObservableObject {
                 all += DiskCleaner.scan(category: category, home: home, runningExecutablePaths: running)
             }
             await MainActor.run { [weak self] in
-                self?.items = all
-                self?.selectedIDs = Set(all.map { $0.id })
-                self?.isScanning = false
-                self?.lastScanDate = Date()
-                self?.refreshFreeBytes()
+                guard let self, self.scanGeneration == gen else { return }
+                self.items = all
+                self.selectedIDs = Set(all.map { $0.id })
+                self.isScanning = false
+                self.lastScanDate = Date()
+                self.refreshFreeBytes()
             }
         }
     }

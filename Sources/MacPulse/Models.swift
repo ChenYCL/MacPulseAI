@@ -24,4 +24,11 @@ struct SystemLoad: Hashable {
 
     var totalPercent: Double { max(0, min(100, userPercent + systemPercent)) }
     static let zero = SystemLoad()
+
+    /// 稳定到 0.1%，避免亚像素抖动触发 SwiftUI 全树重绘。
+    func snapped() -> SystemLoad {
+        SystemLoad(userPercent: (userPercent * 10).rounded() / 10,
+                   systemPercent: (systemPercent * 10).rounded() / 10,
+                   idlePercent: (idlePercent * 10).rounded() / 10)
+    }
 }
