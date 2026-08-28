@@ -7,8 +7,14 @@ final class MonitorModel: ObservableObject {
     @Published private(set) var processes: [ProcSample] = []
     @Published private(set) var load: SystemLoad = .zero
     /// 最近若干次采样的总负载，给背景的实时波形用。
-    /// 只在窗口可见时累积——遮挡时画不出来，攒了也是白攒。
-    @Published private(set) var loadHistory: [Double] = []
+    ///
+    /// **刻意不加 @Published**：每 2 秒 append 一次必然发布，会把紧挨着的三个
+    /// 「值没变就不发布」的守卫（load / memoryUsedPercent / swapUsedText）全部作废，
+    /// 整棵 AppView 照样每拍重建一次。背景波形不需要那么灵敏——
+    /// 由 loadHistoryTick 在整数百分点变化时才推一次。
+    private(set) var loadHistory: [Double] = []
+    /// 波形的发布节流：只有波形形状真的会变（整数百分点变了）才 +1。
+    @Published private(set) var loadHistoryTick: Int = 0
     @Published private(set) var statusMessage: String?
     @Published var isPaused = false
     @Published var refreshInterval: Double = 2 {
@@ -33,6 +39,11 @@ final class MonitorModel: ObservableObject {
     /// 窗口不可见时跳过 SwiftUI 表格刷新（渲染占大头），打开窗口立即补一次。
     /// 由 AppDelegate 依据 NSWindow.occlusionState 维护。
     private var isWindowVisible = true
+    /// 菜单栏 HUD 是否正开着。HUD 绑的就是 load / memoryUsedPercent / processes，
+    /// 只按主窗口可见性 gating 的话，关掉窗口再点状态栏，HUD 里的火候/水腑和 TOP 进程
+    /// 会冻在窗口隐藏那一刻，而它上面一行的状态栏标题还在实时跳——同一个 CPU 数字两个值。
+    private var isHUDVisible = false
+    private var shouldPublish: Bool { isWindowVisible || isHUDVisible }
     /// 进程表是否真的在屏幕上。全量采样要 fork /bin/ps（实测 100ms+），
     /// 停在选择台或别的模块时没人看这张表——降到 1/5 频率，只为卡面计数和
     /// AI 快照留一份大致新鲜的 latestProcesses。非 @Published：改它不该触发重绘。
@@ -74,14 +85,17 @@ final class MonitorModel: ObservableObject {
         // 这几项是 mach/sysctl 直接读取，微秒级，留在主线程无妨
         let l = loadTracker.current()
         onLoadUpdate?(l)
-        // 窗口遮挡时菜单栏仍要数字，但不要发布 @Published 去重绘整棵 SwiftUI 树。
-        if isWindowVisible {
+        // 窗口遮挡且 HUD 也没开时，不要发布 @Published 去重绘整棵 SwiftUI 树。
+        if shouldPublish {
             let snapped = l.snapped()
             if snapped != load { load = snapped }
-            loadHistory.append(min(100, max(0, l.totalPercent)))
+            let v = min(100, max(0, l.totalPercent))
+            let changed = loadHistory.last.map { Int($0) != Int(v) } ?? true
+            loadHistory.append(v)
             if loadHistory.count > Self.historyLimit {
                 loadHistory.removeFirst(loadHistory.count - Self.historyLimit)
             }
+            if changed { loadHistoryTick &+= 1 }
             refreshMemoryStats()
         }
 
@@ -111,7 +125,7 @@ final class MonitorModel: ObservableObject {
         switch result {
         case .success(let procs):
             latestProcesses = procs
-            if isWindowVisible { processes = procs }
+            if shouldPublish { processes = procs }
         case .failure(let error):
             statusMessage = L10n.s("进程采样失败：\(error.localizedDescription)",
                                    "Process sampling failed: \(error.localizedDescription)")
@@ -152,6 +166,17 @@ final class MonitorModel: ObservableObject {
     func setWindowVisible(_ visible: Bool) {
         let appeared = visible && !isWindowVisible
         isWindowVisible = visible
+        guard appeared else { return }
+        processes = latestProcesses
+        let snapped = loadTracker.current().snapped()
+        if snapped != load { load = snapped }
+        refreshMemoryStats()
+    }
+
+    /// 菜单栏 HUD 开合。开着的时候它需要实时数字，哪怕主窗口是关的。
+    func setHUDVisible(_ visible: Bool) {
+        let appeared = visible && !isHUDVisible
+        isHUDVisible = visible
         guard appeared else { return }
         processes = latestProcesses
         let snapped = loadTracker.current().snapped()

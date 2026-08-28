@@ -141,11 +141,8 @@ final class SafetyTests: XCTestCase {
         XCTAssertTrue(redacted.contains("rm -rf /tmp/x"), "命令保留供 AI 分析")
         XCTAssertTrue(redacted.contains("[REDACTED:apiKey]"))
     }
-}
 
     // MARK: 历史版本包过滤
-
-    private var home: URL { URL(fileURLWithPath: "/Users/tester") }
 
     private func versionItem(_ parent: URL, _ name: String, bytes: Int64 = 50_000_000) -> DiskCleaner.Item {
         DiskCleaner.Item(category: .legacyVersions,
@@ -239,3 +236,4 @@ final class SafetyTests: XCTestCase {
         XCTAssertTrue(result.output.contains("macpulse-shell-test"))
         XCTAssertFalse(result.truncated)
     }
+}

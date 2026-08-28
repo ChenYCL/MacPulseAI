@@ -162,21 +162,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         statusItem = item
     }
 
+    @MainActor
     @objc private func statusItemClicked(_ sender: NSStatusBarButton) {
-        guard let item = statusItem, let event = NSApp.currentEvent else { return }
+        guard let event = NSApp.currentEvent else { return }
         if event.type == .rightMouseUp {
-            statusMenu?.popUp(positioning: nil, at: NSPoint(x: 0, y: item.button!.bounds.maxY + 4),
-                              in: item.button!)
+            // 用 sender：NSStatusItem.button 是可选的，菜单栏溢出、用户 ⌘ 拖走状态项、
+            // 快速用户切换重建菜单栏时都会是 nil，强解包会把整个 app（连同监控和在跑的 AI 流）带走。
+            statusMenu?.popUp(positioning: nil,
+                              at: NSPoint(x: 0, y: sender.bounds.maxY + 4),
+                              in: sender)
         } else {
             toggleHudPopover()
         }
     }
 
+    @MainActor
     private func toggleHudPopover() {
         guard let button = statusItem?.button else { return }
         if let hud = hudPopover, hud.isShown {
             hud.performClose(nil)
+            model.setHUDVisible(false)
         } else {
+            model.setHUDVisible(true)
             hudPopover?.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
             hudPopover?.contentViewController?.view.window?.makeKey()
         }

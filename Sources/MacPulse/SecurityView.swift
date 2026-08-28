@@ -81,14 +81,12 @@ struct SecurityView: View {
             }
         }
         .onAppear { if lastCheck == nil { refresh() } }
-        .onChange(of: request) { pending in
-            guard let pending else { return }
-            switch pending {
-            case .showPorts: segment = .ports
-            case .recheckClipboard: segment = .audit; refresh()
-            }
-            request = nil          // 消费掉，回到本页时不重复触发
-        }
+        // 必须 onAppear + onChange 双管：从选择台点装备槽时，enter(pane) 和
+        // securityRequest = ... 是同一次 SwiftUI 更新，本视图是「带着 request 被创建出来」的，
+        // onChange 对初始值不触发；而 pageBody 的 switch 每次回选择台都会销毁本视图，
+        // 所以永远走的是「新建」这条路——只挂 onChange 等于这两个槽位是死的。
+        .onAppear { consume(request) }
+        .onChange(of: request) { consume($0) }
         .onReceive(NotificationCenter.default.publisher(for: SafetyGuard.JournalChanged.name)) { _ in
             journal = SafetyGuard.journal
         }
@@ -209,6 +207,18 @@ struct SecurityView: View {
     }
 
     // MARK: 辅助
+
+    /// 消费一次深链请求；消费后清空，回到本页时不重复触发。
+    private func consume(_ pending: Request?) {
+        guard let pending else { return }
+        switch pending {
+        case .showPorts: segment = .ports
+        case .recheckClipboard:
+            segment = .audit
+            refresh()
+        }
+        request = nil
+    }
 
     private func refresh() {
         let text = ClipboardAuditor.currentClipboardText() ?? ""

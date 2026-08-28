@@ -142,7 +142,7 @@ Studio.microLabel(_:)  全大写微标 + 大字距
 
 ```bash
 swift build                     # 编译
-swift test                      # 79 个单元测试，必须全绿
+swift test                      # 88 个单元测试，必须全绿
 ./scripts/build_app.sh          # 打出 build/MacPulse.app
 open build/MacPulse.app
 
@@ -176,6 +176,18 @@ swift scripts/cutout.swift      # 从 art/hero-*.jpg 重新生成去背立绘
   回答会被当成完整答案交出去，不报错也不重试。已有回归测试
   （`testTruncatedAfterPartialTextRetriesWithLargerBudget`）钉住这个顺序。
 - 流式重试前必须调 `onReset` 让调用方清空占位消息，否则第二轮的增量会接在第一轮后面变成重复。
+- `.onChange(of:)` **对视图诞生时就带着的值不触发**。深链（如 SecurityView 的 `Request`）
+  必须 `onAppear` + `onChange` 双管：`enter(pane)` 和 `request = ...` 是同一次 SwiftUI 更新，
+  目标视图是「带着请求被创建出来」的。只挂 onChange = 那个入口是死的。
+- `ForEach` 的元素别用 `let id = UUID()`。这些结构每次 body 都重建，UUID 会让 SwiftUI
+  每拍换一批身份，把子视图连同 `@State`（悬停高亮之类）一起拆掉重建。用内容派生的稳定 id。
+- `Equatable` 视图比较排序器时要比整个 `KeyPathComparator`，不能只比 `.order`——
+  换列时 order 往往不变，只比 order 会把表头点击整个吞掉。
+- 给 `@Published` 加字段前想清楚发布频率。一个每拍都变的数组会把周围所有
+  「值没变就不发布」的守卫全部作废。需要高频数据就用非 published 缓冲 + 节流的 tick。
+- 测试文件里多一个花括号，后面的 `func test` 会变成文件作用域函数，XCTest **不会报错也不会运行**。
+  改完对一下 `grep -c "func test"` 和 `swift test` 报的条数——曾经有 9 个测试
+  （含全部 ShellGuard 危险命令拦截）这样静默失联，掩盖了一个真 bug。
 
 ---
 

@@ -22,7 +22,10 @@ struct ProcessTable: View, Equatable {
             && lhs.highlightThreshold == rhs.highlightThreshold
             && lhs.flaggedPIDs == rhs.flaggedPIDs
             && lhs.selection == rhs.selection
-            && lhs.sortOrder.map(\.order) == rhs.sortOrder.map(\.order)
+            // 整个比较器都要比，不能只比 .order：换排序列时 order 常常不变
+            // （两列都是降序），只比 order 会让表头点击被 .equatable() 整个吞掉，
+            // 暂停刷新时更是永远不响应。KeyPathComparator 本身是 Equatable。
+            && lhs.sortOrder == rhs.sortOrder
             && lhs.processes.count == rhs.processes.count
             // 采样内容真的变了才重排：逐个比 pid+cpu 比重排一次便宜得多。
             && zip(lhs.processes, rhs.processes).allSatisfy {

@@ -141,13 +141,13 @@ enum DiskCleaner {
         return items.map { item -> Item in
             var copy = item
             let parent = item.url.deletingLastPathComponent().path
-            if var key = versionKey(item.name), let newest = groups[parent] {
-                if isNewer(newest, than: key) || key == newest {
-                    // 最新版本 → 不视为旧版本
-                } else {
-                    copy.isLegacyVersion = true
-                }
-                key = newest // silence unused warning in release
+            // 组里最新的那个版本留下，其余都是旧版本。
+            // 原先写的是 `if isNewer(newest, than: key) || key == newest { /* 保留 */ }`——
+            // 而 newest 按定义就是组内最大，对任何旧版本 isNewer(newest, key) 都成立，
+            // 于是每一项都走了「保留」分支，从来没有东西被标成可清理。
+            // 这个反向判断被孤立在类外的测试挡了很久（见 SafetyTests 的花括号修复）。
+            if let key = versionKey(item.name), let newest = groups[parent], key != newest {
+                copy.isLegacyVersion = true
             }
             copy.inUse = isInUse(item)
             if copy.inUse { copy.isLegacyVersion = false }

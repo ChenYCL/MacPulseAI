@@ -105,7 +105,18 @@ enum MythAsset {
 /// 遥测层画的是真数据（负载波形、内存环、进程密度），但刻意压到看不太清——
 /// 它是气氛，不是仪表盘；真要读数值有顶栏和状态页。所以这里没有任何标签和刻度，
 /// 只有「这台机器现在在动」这一个信息。
-struct StudioBackdrop: View {
+struct StudioBackdrop: View, Equatable {
+    /// 背景里三层渐变 + 全窗 DustOverlay Canvas，跟采样数值无关的部分占绝大多数。
+    /// 没有这层 Equatable，每拍监控刷新都要把它们全部重建一遍。
+    static func == (lhs: StudioBackdrop, rhs: StudioBackdrop) -> Bool {
+        lhs.theme.assetName == rhs.theme.assetName
+            && lhs.lightCenter == rhs.lightCenter
+            && lhs.dust == rhs.dust
+            && lhs.memoryRatio == rhs.memoryRatio
+            && lhs.processCount == rhs.processCount
+            && lhs.loadHistory == rhs.loadHistory
+    }
+
     let theme: WuXingTheme.Theme
     /// 负载历史（0–100），最后一个是最新。
     var loadHistory: [Double] = []

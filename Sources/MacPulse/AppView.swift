@@ -265,6 +265,7 @@ struct AppView: View {
                            memoryRatio: model.memoryUsedPercent.map { $0 / 100 },
                            processCount: model.processes.count,
                            lightCenter: activePane == nil ? UnitPoint(x: 0.5, y: 0.38) : .center)
+                .equatable()
             VStack(spacing: 0) {
                 TopNavBar(stat: StatValue(model.load),
                           memPercent: model.memoryUsedPercent,
@@ -281,6 +282,7 @@ struct AppView: View {
                           },
                           onPause: { model.isPaused.toggle() },
                           onSettings: { showSettings = true })
+                    .equatable()
                 if activePane == nil {
                     rosterScreen
                 } else {
@@ -652,11 +654,16 @@ struct AppView: View {
     }
 
     private var analyzeDisabled: Bool {
-        chat.isStreaming || (activePane == nil && model.processes.isEmpty && navPane == .status)
+        // 没有进程快照就分析等于让模型对着空气说话。原来写的是 activePane == nil，
+        // 把这条守卫限制在了选择台上——而它本来就是为状态页写的。
+        chat.isStreaming || (navPane == .status && model.processes.isEmpty)
     }
 
     private func runAnalysis() {
         ensureChatConfigured()
+        // 对话面板只在工作台里渲染。停在选择台时直接开流，token 照烧、请求照发，
+        // 但回复没有任何地方显示——先落到对应的界再说话。
+        if activePane == nil { enter(navPane) }
         switch navPane {
         case .status:
             showAIPanel = true

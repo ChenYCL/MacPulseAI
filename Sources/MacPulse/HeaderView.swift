@@ -14,7 +14,19 @@ struct StatValue: Equatable {
 
 /// 顶栏：左边品牌，正中一排文字标签，右边活体读数与开关。
 /// 参考里的导航条就是纯文字 + 选中项一条蓝下划线，除此之外什么都不画。
-struct TopNavBar: View {
+struct TopNavBar: View, Equatable {
+    /// 顶栏每 2 秒被采样拖着重建一次：7 个标签按钮 + matchedGeometryEffect 胶囊 +
+    /// 两颗带阴影的胶囊 + 头像。读数没变就整块跳过（被它替掉的旧 HeaderView 本来就是 Equatable，
+    /// 重写时把这层丢了）。闭包不参与比较——它们每次都是新实例，比了就永远不相等。
+    static func == (lhs: TopNavBar, rhs: TopNavBar) -> Bool {
+        lhs.stat == rhs.stat
+            && lhs.memPercent == rhs.memPercent
+            && lhs.isPaused == rhs.isPaused
+            && lhs.onRoster == rhs.onRoster
+            && lhs.activePane == rhs.activePane
+            && lhs.theme.assetName == rhs.theme.assetName
+    }
+
     let stat: StatValue
     let memPercent: Double?
     let isPaused: Bool

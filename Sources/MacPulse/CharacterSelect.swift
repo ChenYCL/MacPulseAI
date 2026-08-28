@@ -6,7 +6,9 @@ import SwiftUI
 /// 卡面属性行：标签 / 数值 / 可选比例（画细条）。值类型 + Equatable，
 /// 采样数值没变时整块读数可以按内容跳过重绘。
 struct CardStat: Identifiable, Equatable {
-    let id = UUID()
+    /// 用 label 当 id，不要 UUID：这些结构每次 body 都会重建，
+    /// UUID 会让 ForEach 每 2 秒换一批身份、把子视图连同 @State（比如 hover 高亮）一起拆掉重建。
+    var id: String { label }
     let label: String
     let value: String
     var ratio: Double? = nil
@@ -14,7 +16,8 @@ struct CardStat: Identifiable, Equatable {
 
 /// 装备槽：本模块的一个快捷动作。
 struct QuickSlot: Identifiable {
-    let id = UUID()
+    /// 同 CardStat：身份要稳定，否则悬停高亮每 2 秒被采样刷掉一次。
+    var id: String { icon + title }
     let icon: String
     let title: String
     var enabled: Bool = true
@@ -101,6 +104,9 @@ struct RosterScreen: View {
             }
             .padding(.horizontal, max(6, width * 0.5 - rx - frontSize * 0.30))
             .offset(y: baseline * 0.35)
+            // 神兽的点击区是整个 size×size 方块，zIndex 到 3；箭头必须压在它们上面，
+            // 否则侧边那只（哪怕已经淡到看不见）会把箭头的点击整个吃掉。
+            .zIndex(10)
         }
         .frame(width: width, height: height)
         .contentShape(Rectangle())
@@ -429,10 +435,12 @@ struct BeastFigure: View {
             withAnimation(.easeInOut(duration: 3.0).repeatForever(autoreverses: true)) {
                 idle = true
             }
-            if isFront {
-                withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) {
-                    pulse = true
-                }
+            // 无条件启动：isFront 是会随转轨翻转的 prop，而 onAppear 只跑一次。
+            // 原来把它写在 if isFront 里，于是只有「首次出现时恰好在最前」的那只会呼吸，
+            // 转到其它五界后光环永远停在关闭状态——正好废掉「这只被选中了」的信号。
+            // 光环本身只在 isFront 时渲染，所以让动画一直跑不花钱。
+            withAnimation(.easeInOut(duration: 2.4).repeatForever(autoreverses: true)) {
+                pulse = true
             }
         }
     }

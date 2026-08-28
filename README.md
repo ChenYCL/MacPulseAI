@@ -8,7 +8,7 @@
 Live process monitor · AI security audits · Disk cleanup · App uninstaller · Controlled terminal agent
 
 [![Release](https://img.shields.io/github/v/release/ChenYCL/MacPulseAI)](https://github.com/ChenYCL/MacPulseAI/releases)
-[![Tests](https://img.shields.io/badge/tests-79%20green-brightgreen)](#-testing)
+[![Tests](https://img.shields.io/badge/tests-88%20green-brightgreen)](#-testing)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-macOS%2013%2B-lightgrey)](https://github.com/ChenYCL/MacPulseAI/releases)
 
@@ -83,7 +83,7 @@ MacPulse AI 是一款开源、免费、原生（Swift + SwiftUI，零第三方�
 ```bash
 git clone https://github.com/ChenYCL/MacPulseAI && cd MacPulseAI
 ./scripts/build_app.sh && open build/MacPulse.app
-swift test   # 79 个单元测试
+swift test   # 88 个单元测试
 ```
 要求：macOS 13+ / Xcode 15+（Swift 6 工具链亦可编译，语言模式 v5）。
 
@@ -91,7 +91,7 @@ swift test   # 79 个单元测试
 
 ### 🧪 Testing
 
-79 个单元测试覆盖：瞬时 CPU 数学（多核夹取/PID 复用回退）、ps/libproc 解析、两种 LLM 协议的流式 SSE 与错误事件（对照官方规范）、HITL 动作解析、SafetyGuard 拦截矩阵、剪贴板模式与脱敏、卸载器残留匹配、版本过滤、启动项扫描、Markdown 解析、设置持久化（0600）。另有 `tools/mock_llm.py` 本地双协议 mock 供无 Key 集成测试。
+88 个单元测试覆盖：瞬时 CPU 数学（多核夹取/PID 复用回退）、ps/libproc 解析、两种 LLM 协议的流式 SSE 与错误事件（对照官方规范）、HITL 动作解析、SafetyGuard 拦截矩阵、剪贴板模式与脱敏、卸载器残留匹配、版本过滤、启动项扫描、Markdown 解析、设置持久化（0600）。另有 `tools/mock_llm.py` 本地双协议 mock 供无 Key 集成测试。
 
 ### 性能
 
