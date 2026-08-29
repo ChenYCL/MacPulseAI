@@ -33,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         // 用户想横向拖着转轨，结果拖动的是整个窗口。标题栏区域照样能拖窗口。
         win.isMovableByWindowBackground = false
         win.isOpaque = true
+        // 程序化创建的 NSWindow 默认 isReleasedWhenClosed = true：用户点关闭按钮后
+        // AppKit 会把窗口对象整个释放，而 AppDelegate.window 还持有悬垂指针，
+        // 之后从菜单栏 HUD 或 Dock reopen 调 makeKeyAndOrderFront 就是 SIGSEGV
+        // （诊断报告里五起崩溃全中）。关掉它，close 只隐藏窗口，对象归 ARC 管。
+        win.isReleasedWhenClosed = false
         win.backgroundColor = NSColor(calibratedRed: 0.949, green: 0.957, blue: 0.965, alpha: 1)
         win.minSize = NSSize(width: 1100, height: 740)
         win.contentView = NSHostingView(rootView: AppView(model: model, store: store, disk: disk))
@@ -195,7 +200,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc private func showMainWindow() {
-        window?.makeKeyAndOrderFront(nil)
+        guard let win = window else { return }
+        // 关闭只是隐藏（isReleasedWhenClosed = false），最小化则进了 Dock；
+        // 这两种状态点「打开主窗口」都要能真正回到屏幕前。
+        if win.isMiniaturized { win.deminiaturize(nil) }
+        win.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
 
