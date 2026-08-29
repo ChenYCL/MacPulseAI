@@ -17,7 +17,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Show toolchain
         run: |
@@ -50,7 +50,7 @@ jobs:
           echo "sha=dist/$DMG_NAME.sha256" >> "$GITHUB_OUTPUT"
 
       - name: Upload artifact (debugging / manual runs)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: MacPulseAI-DMG
           path: |
@@ -60,7 +60,7 @@ jobs:
 
       - name: Create GitHub Release (tag pushes only)
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           name: MacPulse AI ${{ github.ref_name }}
           body: |
